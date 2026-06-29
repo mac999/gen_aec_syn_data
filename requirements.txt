@@ -1,0 +1,24 @@
+# Core
+PyMuPDF>=1.23.0
+ifcopenshell>=0.7.0
+
+# LangChain + Ollama
+langchain>=0.2.0
+langchain-community>=0.2.0
+langchain-core>=0.2.0
+langchain-ollama>=0.1.0
+
+# Data validation
+pydantic>=2.5.0
+
+# Rendering & image processing
+numpy>=1.24.0
+Pillow>=10.0.0
+matplotlib>=3.7.0
+
+# HTTP & utilities
+requests>=2.31.0
+tqdm>=4.65.0
+
+# Environment / secrets
+python-dotenv>=1.0.0
