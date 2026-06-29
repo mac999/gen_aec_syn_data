@@ -1,0 +1,133 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "{{uploaded_image_name}}"
+    }
+  },
+  "2": {
+    "class_type": "CannyEdgePreprocessor",
+    "inputs": {
+      "image": [
+        "1",
+        0
+      ],
+      "low_threshold": 100,
+      "high_threshold": 200,
+      "resolution": 512
+    }
+  },
+  "3": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "{{sd_model}}"
+    }
+  },
+  "4": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "3",
+        1
+      ],
+      "text": "construction site, realistic photograph, high detail, professional photography"
+    }
+  },
+  "5": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "3",
+        1
+      ],
+      "text": "blurry, cartoon, drawing, illustration, low quality, watermark, text, logo"
+    }
+  },
+  "6": {
+    "class_type": "ControlNetLoader",
+    "inputs": {
+      "control_net_name": "{{controlnet_model}}"
+    }
+  },
+  "7": {
+    "class_type": "ControlNetApply",
+    "inputs": {
+      "conditioning": [
+        "4",
+        0
+      ],
+      "control_net": [
+        "6",
+        0
+      ],
+      "image": [
+        "2",
+        0
+      ],
+      "strength": "{{controlnet_strength}}"
+    }
+  },
+  "8": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": [
+        "1",
+        0
+      ],
+      "vae": [
+        "3",
+        2
+      ]
+    }
+  },
+  "9": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "3",
+        0
+      ],
+      "positive": [
+        "7",
+        0
+      ],
+      "negative": [
+        "5",
+        0
+      ],
+      "latent_image": [
+        "8",
+        0
+      ],
+      "seed": "{{seed}}",
+      "steps": "{{steps}}",
+      "cfg": "{{cfg}}",
+      "sampler_name": "euler_ancestral",
+      "scheduler": "normal",
+      "denoise": "{{denoise}}"
+    }
+  },
+  "10": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "9",
+        0
+      ],
+      "vae": [
+        "3",
+        2
+      ]
+    }
+  },
+  "11": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "10",
+        0
+      ],
+      "filename_prefix": "site_photo"
+    }
+  }
+}
