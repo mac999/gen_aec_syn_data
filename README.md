@@ -6,7 +6,7 @@ The ASDG pipeline that ingests AEC source documents (PDF) and 3D BIM models (IFC
 <img src="./doc/img3.png" height="200"> </img> <img src="./doc/img2.png" height="200"> </img></br>
 <img src="./doc/img1.png" height="420"> </img> 
 </p>
----
+
 
 ## Table of Contents
 
