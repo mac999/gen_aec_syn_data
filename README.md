@@ -3,7 +3,7 @@
 The ASDG pipeline that ingests AEC source documents (PDF) and 3D BIM models (IFC) to automatically generate high-quality, AI-ready synthetic datasets (JSONL + Images) for sLLM and VLM training. The purpose of ASDG is for reviewing and setting up the initial rapid learning inference pipeline technology stack.
 
 <img src="./doc/img3.png" height="200"> </img> <img src="./doc/img2.png" height="200"> </img></br>
-<img src="./doc/img1.png" height="300"> </img> 
+<img src="./doc/img1.png" height="400"> </img> 
 
 ---
 
