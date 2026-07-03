@@ -85,16 +85,19 @@ class PipelineConfig:
     def site_photo_dir(self) -> Path:
         return self.vlm_output_dir / "images" / "site_photo"
 
+    def file_output_dir(self, stem: str, kind: str) -> Path:
+        """
+        Per-input-file output directory, e.g. ``output/<stem>_sft/``.
+
+        *stem* is the input file name without extension; *kind* is one of
+        ``"sft"``, ``"dapt"``, or ``"vlm"``.
+        """
+        return self.output_dir / f"{stem}_{kind}"
+
     def ensure_output_dirs(self) -> None:
-        """Create all required output directories."""
-        for d in (
-            self.sft_output_dir,
-            self.vlm_output_dir,
-            self.bim_render_dir,
-            self.site_photo_dir,
-        ):
-            d.mkdir(parents=True, exist_ok=True)
-        logger.info("Output directory structure ready.")
+        """Create the output root. Per-file sub-directories are made on demand."""
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        logger.info("Output root ready: %s", self.output_dir)
 
     # Serialisation 
     @classmethod

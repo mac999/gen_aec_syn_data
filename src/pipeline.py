@@ -83,13 +83,9 @@ class AECPipeline:
             sft_total += self._process_pdf(pdf_path)
 
         if pdfs:
-            mode = self.config.dataset_mode
-            if mode in ("sft", "both"):
-                logger.info("sLLM SFT dataset → %s", self.sllm_sft_engine.jsonl_path)
-            if mode in ("dapt", "both"):
-                logger.info("sLLM DAPT dataset → %s", self.sllm_dapt_engine.jsonl_path)
             logger.info(
-                "sLLM synthesis complete (mode=%s). Total records: %d", mode, sft_total
+                "sLLM synthesis complete (mode=%s). Total records: %d — outputs under %s",
+                self.config.dataset_mode, sft_total, self.config.output_dir,
             )
 
         # ── VLM branch (IFC → renders → JSONL) ─────────────────────────
@@ -99,9 +95,8 @@ class AECPipeline:
 
         if ifcs:
             logger.info(
-                "VLM synthesis complete. Total samples: %d → %s",
-                vlm_total,
-                self.vlm_engine.jsonl_path,
+                "VLM synthesis complete. Total samples: %d — outputs under %s",
+                vlm_total, self.config.output_dir,
             )
 
         logger.info("=" * 60)
@@ -126,18 +121,23 @@ class AECPipeline:
             len(chunks), mode,
         )
 
+        stem = pdf_path.stem
         count = 0
         if mode in ("sft", "both"):
             try:
+                self.sllm_sft_engine.set_output_dir(self.config.file_output_dir(stem, "sft"))
                 count += self.sllm_sft_engine.process_chunks(chunks)
+                logger.info("[PDF] SFT → %s", self.sllm_sft_engine.jsonl_path)
             except Exception as exc:
                 logger.error("[PDF] SFT engine error for '%s': %s", pdf_path.name, exc)
 
         if mode in ("dapt", "both"):
             try:
+                self.sllm_dapt_engine.set_output_dir(self.config.file_output_dir(stem, "dapt"))
                 count += self.sllm_dapt_engine.process_chunks(
                     chunks, doc_meta={"source_name": pdf_path.name}
                 )
+                logger.info("[PDF] DAPT → %s", self.sllm_dapt_engine.jsonl_path)
             except Exception as exc:
                 logger.error("[PDF] DAPT engine error for '%s': %s", pdf_path.name, exc)
 
@@ -146,8 +146,15 @@ class AECPipeline:
 
     def _process_ifc(self, ifc_path: Path) -> int:
         logger.info("[IFC] Processing: %s", ifc_path.name)
+
+        # Per-file output: output/<stem>_vlm/{images/..., vlm_training_data.jsonl}
+        vlm_dir = self.config.file_output_dir(ifc_path.stem, "vlm")
+        self.vlm_engine.set_output_dir(vlm_dir)
+
         try:
-            elements, render_paths = self.ifc_processor.process(ifc_path)
+            elements, render_paths = self.ifc_processor.process(
+                ifc_path, render_dir=self.vlm_engine.bim_render_dir
+            )
         except Exception as exc:
             logger.error("[IFC] Processing failed for '%s': %s", ifc_path.name, exc)
             return 0
@@ -176,7 +183,10 @@ class AECPipeline:
             logger.error("[IFC] VLM engine error for '%s': %s", ifc_path.name, exc)
             return 0
 
-        logger.info("[IFC] Done '%s' — %d samples generated", ifc_path.name, count)
+        logger.info(
+            "[IFC] Done '%s' — %d samples → %s",
+            ifc_path.name, count, self.vlm_engine.jsonl_path,
+        )
         return count
 
     @staticmethod

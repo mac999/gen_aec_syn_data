@@ -98,8 +98,14 @@ class SLLM_SFT_Engine:
         self._counter_lock = threading.Lock()  # guard sample counter + file
         self._sample_counter = 0
 
-        self.config.sft_output_dir.mkdir(parents=True, exist_ok=True)
+        # Output path is set per input file via set_output_dir(); default here
+        # keeps the engine usable standalone.
         self.jsonl_path = self.config.sft_output_dir / "sllm_training_data.jsonl"
+
+    def set_output_dir(self, out_dir: Path) -> None:
+        """Point this engine's JSONL output at *out_dir* (created if missing)."""
+        out_dir.mkdir(parents=True, exist_ok=True)
+        self.jsonl_path = out_dir / "sllm_training_data.jsonl"
 
     # ── Public API ──────────────────────────────────────────────────────────
 
