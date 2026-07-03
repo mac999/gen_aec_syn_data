@@ -73,10 +73,16 @@ class IFCProcessor:
         self.config = config
 
     def process(
-        self, ifc_path: Path
+        self, ifc_path: Path, render_dir: Optional[Path] = None
     ) -> Tuple[List[IFCElementInfo], List[Path]]:
         """
         Parse *ifc_path* and render base views.
+
+        Parameters
+        ----------
+        ifc_path   : path to the IFC file.
+        render_dir : directory to save PNG renders into. Defaults to
+                     ``config.bim_render_dir`` when not given.
 
         Returns
         -------
@@ -99,7 +105,8 @@ class IFCProcessor:
         elements = self._extract_elements(ifc_file, ifc_path.stem)
         logger.info("Extracted %d relevant elements from %s", len(elements), ifc_path.name)
 
-        render_paths = self._render_views(ifc_file, ifc_path.stem, elements)
+        render_dir = render_dir or self.config.bim_render_dir
+        render_paths = self._render_views(ifc_file, ifc_path.stem, elements, render_dir)
         return elements, render_paths
 
     def _extract_elements(
@@ -142,9 +149,14 @@ class IFCProcessor:
         return props
 
     def _render_views(
-        self, ifc_file: Any, model_id: str, elements: List[IFCElementInfo]
+        self,
+        ifc_file: Any,
+        model_id: str,
+        elements: List[IFCElementInfo],
+        render_dir: Path,
     ) -> List[Path]:
-        """Render each view and return a list of saved PNG paths."""
+        """Render each view into *render_dir* and return the saved PNG paths."""
+        render_dir.mkdir(parents=True, exist_ok=True)
         render_paths: List[Path] = []
 
         # Build render groups: [0] the whole model, then one group per
@@ -168,7 +180,7 @@ class IFCProcessor:
             all_tris = self._extract_geometry(ifc_file, group)
 
             for view_name in self.config.ifc_views:
-                out_path = self.config.bim_render_dir / f"{model_id}_{index}_{view_name}.png"
+                out_path = render_dir / f"{model_id}_{index}_{view_name}.png"
                 try:
                     self._render_to_file(all_tris, group, view_name, out_path)
                     render_paths.append(out_path)

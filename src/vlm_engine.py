@@ -168,9 +168,26 @@ class VLMEngine:
         self._canny_node_available: Optional[bool] = None
         self._sample_counter = 0
 
-        self.config.vlm_output_dir.mkdir(parents=True, exist_ok=True)
-        self.config.site_photo_dir.mkdir(parents=True, exist_ok=True)
+        # Output locations are set per input file via set_output_dir(); the
+        # defaults below keep the engine usable standalone.
+        self.output_root = self.config.vlm_output_dir
+        self.bim_render_dir = self.config.bim_render_dir
+        self.site_photo_dir = self.config.site_photo_dir
         self.jsonl_path = self.config.vlm_output_dir / "vlm_training_data.jsonl"
+
+    def set_output_dir(self, out_dir: Path) -> None:
+        """
+        Point all VLM outputs under *out_dir* (created if missing):
+          - <out_dir>/images/bim_render/   (BIM renders)
+          - <out_dir>/images/site_photo/   (synthesised site photos)
+          - <out_dir>/vlm_training_data.jsonl
+        """
+        self.output_root = out_dir
+        self.bim_render_dir = out_dir / "images" / "bim_render"
+        self.site_photo_dir = out_dir / "images" / "site_photo"
+        for d in (self.bim_render_dir, self.site_photo_dir):
+            d.mkdir(parents=True, exist_ok=True)
+        self.jsonl_path = out_dir / "vlm_training_data.jsonl"
 
     def process_renders(
         self,
@@ -451,7 +468,7 @@ class VLMEngine:
             logger.error("Image download failed: %s", resp.status_code)
             return None
 
-        out_path = self.config.site_photo_dir / f"{stem}_site.jpg"
+        out_path = self.site_photo_dir / f"{stem}_site.jpg"
         out_path.write_bytes(resp.content)
         logger.info("Site photo saved: %s", out_path.name)
         return out_path
@@ -459,7 +476,7 @@ class VLMEngine:
     def _copy_as_site_photo(self, render_path: Path) -> Path:
         """Fallback — copy the BIM render as site photo placeholder."""
         import shutil  # noqa: PLC0415
-        out_path = self.config.site_photo_dir / f"{render_path.stem}_site.png"
+        out_path = self.site_photo_dir / f"{render_path.stem}_site.png"
         shutil.copy2(render_path, out_path)
         logger.info("Fallback site photo saved (copy): %s", out_path.name)
         return out_path
@@ -475,10 +492,6 @@ class VLMEngine:
     ) -> VLMSample:
         self._sample_counter += 1
         sample_id = f"vlm_{self._sample_counter:06d}"
-
-        # Relative paths (relative to output root for portability)
-        bim_rel = str(render_path.relative_to(self.config.output_dir)).replace("\\", "/")
-        site_rel = str(site_photo_path.relative_to(self.config.output_dir)).replace("\\", "/")
 
         return VLMSample(
             id=sample_id,
