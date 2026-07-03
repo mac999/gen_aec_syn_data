@@ -8,7 +8,14 @@ try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    pass  
+    pass
+
+# Log messages contain Unicode (—, →, Korean). Force UTF-8 on the console so
+# they don't crash the handler on code-page-limited terminals (e.g. cp949).
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, ValueError):
+    pass
 
 logging.basicConfig(
     level=logging.INFO,
