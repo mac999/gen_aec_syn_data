@@ -1,12 +1,8 @@
-# AEC Synthetic Dataset Generation Pipeline (ASDG)
+# AEC Synthetic Dataset Generation Pipeline
 
-The ASDG pipeline that ingests AEC source documents (PDF) and 3D BIM models (IFC) to automatically generate high-quality, AI-ready synthetic datasets (JSONL + Images) for sLLM and VLM training. The purpose of ASDG is for reviewing and setting up the initial rapid learning inference pipeline technology stack.
+The pipeline that ingests AEC source documents and 3D BIM models (IFC) to automatically generate high-quality, AI-ready synthetic datasets (JSONL + Images) for sLLM and VLM training.
 
-<p align="center">
-<img src="./doc/img3.png" height="150"> </img> <img src="./doc/img2.png" height="150"> </img></br>
-<img src="./doc/img1.png" height="320"> </img> 
-</p>
-
+---
 
 ## Table of Contents
 
@@ -35,11 +31,13 @@ Modern AEC (Architecture, Engineering, Construction) AI models require large vol
 This pipeline automates the full synthesis loop:
 
 ```
-                                 ┌─ SFT  ─► QA pairs   (LLM)    ─► sft_dataset/sllm_training_data.jsonl
+                                 ┌─ SFT  ─► QA pairs   (LLM)    ─► output/<pdf>_sft/sllm_training_data.jsonl
 PDF Documents  ──►  Text Chunks ─┤
-                                 └─ DAPT ─► raw corpus (no LLM) ─► sft_dataset/dapt_training_data.jsonl
-IFC 3D Models  ──►  BIM Renders  ──►  ComfyUI I2I              ─► vlm_dataset/vlm_training_data.jsonl + Images
+                                 └─ DAPT ─► raw corpus (no LLM) ─► output/<pdf>_dapt/dapt_training_data.jsonl
+IFC 3D Models  ──►  BIM Renders  ──►  ComfyUI I2I              ─► output/<ifc>_vlm/vlm_training_data.jsonl + Images
 ```
+
+Each input file gets its own output folder named `<input-file-stem>_<sft|dapt|vlm>` under `output/`.
 
 Local inference runs on a single machine with **8 GB VRAM** (tested on NVIDIA RTX-class mobile workstation GPUs).
 Three LLM backends are supported for SFT synthesis:
@@ -85,11 +83,12 @@ gen_aec_syn_data/
 ├── .env.example             # Template for .env
 ├── requirements.txt
 ├── input/                   # Drop PDF / IFC files here
-├── output/                  # Auto-created on first run
-│   ├── sft_dataset/
-│   │   ├── sllm_training_data.jsonl   # SFT (QA pairs)
+├── output/                  # Auto-created; one sub-folder per input file
+│   ├── <pdf-stem>_sft/
+│   │   └── sllm_training_data.jsonl   # SFT (QA pairs)
+│   ├── <pdf-stem>_dapt/
 │   │   └── dapt_training_data.jsonl   # DAPT (raw corpus)
-│   └── vlm_dataset/
+│   └── <ifc-stem>_vlm/
 │       ├── vlm_training_data.jsonl
 │       └── images/
 │           ├── bim_render/
@@ -409,8 +408,9 @@ python main.py --dataset dapt --backend none --pdf input/regulation.pdf
 python main.py --dataset both --pdf input/regulation.pdf
 ```
 
-> SFT records are written to `output/sft_dataset/sllm_training_data.jsonl`;
-> DAPT records to `output/sft_dataset/dapt_training_data.jsonl`.
+> For a PDF named `regulation.pdf`, SFT records are written to
+> `output/regulation_sft/sllm_training_data.jsonl` and DAPT records to
+> `output/regulation_dapt/dapt_training_data.jsonl`.
 
 ### Gemini backend (cloud)
 
@@ -525,7 +525,27 @@ Options:
 
 ## Output Schema
 
-### sLLM SFT — `output/sft_dataset/sllm_training_data.jsonl`
+### sLLM DAPT — `output/<pdf-stem>_dapt/dapt_training_data.jsonl`
+
+One JSON object per line — raw domain text for continued pre-training (no LLM, no QA):
+
+```json
+{
+  "id": "dapt_000001",
+  "doc_id": "doc_001",
+  "source_type": "",
+  "source_name": "regulation.pdf",
+  "language": "ko",
+  "domain_tags": [],
+  "text": "<verbatim document chunk>",
+  "section_path": "",
+  "page_range": "12-13",
+  "license": "",
+  "raw_hash": "<sha256 of text, for dedup>"
+}
+```
+
+### sLLM SFT — `output/<pdf-stem>_sft/sllm_training_data.jsonl`
 
 One JSON object per line (instruction + grounded answer with evidence tracing):
 
@@ -550,29 +570,10 @@ One JSON object per line (instruction + grounded answer with evidence tracing):
 }
 ```
 
-### sLLM DAPT — `output/sft_dataset/dapt_training_data.jsonl`
+### VLM — `output/<ifc-stem>_vlm/vlm_training_data.jsonl`
 
-One JSON object per line — raw domain text for continued pre-training (no LLM, no QA):
-
-```json
-{
-  "id": "dapt_000001",
-  "doc_id": "doc_001",
-  "source_type": "",
-  "source_name": "regulation.pdf",
-  "language": "ko",
-  "domain_tags": [],
-  "text": "<verbatim document chunk>",
-  "section_path": "",
-  "page_range": "12-13",
-  "license": "",
-  "raw_hash": "<sha256 of text, for dedup>"
-}
-```
-
-### VLM — `output/vlm_dataset/vlm_training_data.jsonl`
-
-One JSON object per line (MMFineReason-SFT compatible):
+One JSON object per line (MMFineReason-SFT compatible). Image paths are
+relative to the file's own `_vlm` folder:
 
 ```json
 {
