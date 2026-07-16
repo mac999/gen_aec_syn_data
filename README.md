@@ -3,9 +3,9 @@
 The pipeline that ingests AEC source documents and 3D BIM models (IFC) to automatically generate high-quality, AI-ready synthetic datasets (JSONL + Images) for sLLM and VLM training.
 
 <p align="center">
-  <img src="./doc/img1.png" height="200"></img></br>
-  <img src="./doc/img2.png" height="200"></img></br>
-  <img src="./doc/img3.png" height="200"></img></br>
+  <img src="./doc/img1.png" height="250"></img></br>
+  <img src="./doc/img2.png" height="240"></img></br>
+  <img src="./doc/img3.png" height="250"></img></br>
 </p>
 
 ---
