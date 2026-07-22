@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+from PIL import Image
 
 from .config import PipelineConfig
 from .schemas import IFCElementInfo
@@ -66,15 +67,249 @@ _VIEW_ANGLES: Dict[str, Tuple[float, float]] = {
 }
 
 
+def _camera_basis(elev: float, azim: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Orthonormal camera frame for matplotlib's (elev, azim) convention.
+
+    Returns ``(right, up, towards_camera)``. ``towards_camera`` points from the
+    scene to the viewer, so a larger dot product with it means *nearer*.
+    """
+    el, az = np.radians(elev), np.radians(azim)
+    d = np.array([np.cos(el) * np.cos(az), np.cos(el) * np.sin(az), np.sin(el)])
+    world_up = np.array([0.0, 0.0, 1.0])
+    if abs(float(d[2])) > 0.999:          # looking straight down/up — z is degenerate
+        world_up = np.array([0.0, 1.0, 0.0])
+    right = np.cross(world_up, d)
+    right /= np.linalg.norm(right)
+    cam_up = np.cross(d, right)
+    return right, cam_up, d
+
+
+def _hex_to_rgb(colour: str) -> Tuple[int, int, int]:
+    h = colour.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+_MARGIN_FRAC = 0.02          # framing margin as a fraction of the image side
+_LIGHT_DIR = np.array([0.4, 0.5, 0.75])
+_LIGHT_DIR = _LIGHT_DIR / np.linalg.norm(_LIGHT_DIR)
+
+
+def _rasterise(
+    tris: np.ndarray, elev: float, azim: float, size: int
+) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
+    """
+    Core orthographic z-buffer pass shared by the colour render and the depth
+    map, so both describe *exactly* the same visible surfaces.
+
+    Returns ``(zbuf, idxbuf, meta)``. ``idxbuf`` holds the winning triangle
+    index per pixel (-1 where nothing was drawn); ``meta`` carries the screen
+    mapping the ground fill needs.
+    """
+    if tris.size == 0:
+        raise ValueError("No triangles to rasterise")
+
+    right, cam_up, towards = _camera_basis(elev, azim)
+    pts = tris.reshape(-1, 3)
+    u = pts @ right
+    v = pts @ cam_up
+    z = pts @ towards
+
+    margin = size * _MARGIN_FRAC
+    span = max(float(u.max() - u.min()), float(v.max() - v.min()), 1e-9)
+    scale = (size - 2 * margin) / span
+    off_u = margin + ((size - 2 * margin) - float(u.max() - u.min()) * scale) / 2.0
+    off_v = margin + ((size - 2 * margin) - float(v.max() - v.min()) * scale) / 2.0
+
+    px = ((u - float(u.min())) * scale + off_u).reshape(-1, 3)
+    # Screen rows grow downwards, so flip the vertical axis.
+    py = ((float(v.max()) - v) * scale + off_v).reshape(-1, 3)
+    zc = z.reshape(-1, 3)
+
+    zbuf = np.full((size, size), -np.inf, dtype=np.float64)
+    idxbuf = np.full((size, size), -1, dtype=np.int32)
+
+    for i in range(px.shape[0]):
+        x0, x1, x2 = px[i]
+        y0, y1, y2 = py[i]
+        z0, z1, z2 = zc[i]
+
+        min_x = max(int(np.floor(min(x0, x1, x2))), 0)
+        max_x = min(int(np.ceil(max(x0, x1, x2))), size - 1)
+        min_y = max(int(np.floor(min(y0, y1, y2))), 0)
+        max_y = min(int(np.ceil(max(y0, y1, y2))), size - 1)
+        if min_x > max_x or min_y > max_y:
+            continue
+
+        denom = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2)
+        if abs(denom) < 1e-12:            # degenerate / edge-on triangle
+            continue
+
+        gx, gy = np.meshgrid(
+            np.arange(min_x, max_x + 1), np.arange(min_y, max_y + 1)
+        )
+        l0 = ((y1 - y2) * (gx - x2) + (x2 - x1) * (gy - y2)) / denom
+        l1 = ((y2 - y0) * (gx - x2) + (x0 - x2) * (gy - y2)) / denom
+        l2 = 1.0 - l0 - l1
+        inside = (l0 >= 0) & (l1 >= 0) & (l2 >= 0)
+        if not inside.any():
+            continue
+
+        depth = l0 * z0 + l1 * z1 + l2 * z2
+        zwin = zbuf[min_y:max_y + 1, min_x:max_x + 1]     # basic slicing → view
+        iwin = idxbuf[min_y:max_y + 1, min_x:max_x + 1]
+        win = inside & (depth > zwin)
+        np.copyto(zwin, depth, where=win)
+        np.copyto(iwin, np.int32(i), where=win)
+
+    if not np.isfinite(zbuf).any():
+        raise ValueError("Rasterisation covered no pixels")
+
+    meta = {
+        "scale": scale, "off_v": off_v, "v_max": float(v.max()),
+        "cam_up_z": float(cam_up[2]), "towards_z": float(towards[2]),
+        "base_z": float(pts[:, 2].min()),
+    }
+    return zbuf, idxbuf, meta
+
+
+def _ground_noise(size: int, seed: int = 20240722) -> np.ndarray:
+    """Smooth value noise in [-1, 1], deterministic across runs."""
+    rng = np.random.default_rng(seed)
+    coarse = rng.random((12, 12)) * 2.0 - 1.0
+    field = np.array(
+        Image.fromarray(((coarse + 1) * 127.5).astype(np.uint8)).resize(
+            (size, size), Image.BICUBIC
+        ),
+        dtype=np.float64,
+    )
+    return field / 127.5 - 1.0
+
+
+def _fill_ground(
+    zbuf: np.ndarray, meta: Dict[str, Any], size: int, roughness: float = 0.0
+) -> np.ndarray:
+    """
+    Fill empty pixels with the depth of an **infinite** ground plane at the
+    model base, giving the hint a horizon and a receding floor.
+
+    A finite ground quad cannot do this under an orthographic camera: its edges
+    stay visible, so it reads as a plinth and the building turns into a scale
+    model on a table.
+    """
+    if abs(meta["towards_z"]) <= 1e-6:
+        return zbuf
+    covered = np.isfinite(zbuf)
+    near, far = float(zbuf[covered].max()), float(zbuf[covered].min())
+
+    rows = np.arange(size, dtype=np.float64)
+    v_row = meta["v_max"] - (rows - meta["off_v"]) / meta["scale"]
+    t_row = (meta["base_z"] - v_row * meta["cam_up_z"]) / meta["towards_z"]
+    depth_rows = np.repeat(t_row[:, None], size, axis=1)
+
+    if roughness > 0:
+        # A mathematically flat plane is read as a cast concrete slab however
+        # hard the prompt argues otherwise. Undulating it slightly makes the
+        # sampler treat it as terrain.
+        depth_rows = depth_rows + _ground_noise(size) * roughness * max(
+            near - far, 1e-9
+        )
+
+    # Beyond this is sky: leave it black rather than let an unbounded plane
+    # flatten the model's own depth range.
+    horizon_cut = far - 1.5 * max(near - far, 1e-9)
+    fill = (~covered) & (depth_rows > horizon_cut)
+    zbuf[fill] = depth_rows[fill]
+    return zbuf
+
+
+def rasterise_depth_map(
+    tris: np.ndarray,
+    elev: float,
+    azim: float,
+    size: int,
+    ground: bool = False,
+    ground_roughness: float = 0.0,
+) -> np.ndarray:
+    """
+    ControlNet-style depth map: **near is white, far is dark, sky is black**.
+
+    Feeding the flat colour render to a depth ControlNet instead makes it read
+    the *drawn lines* as geometry, which is what pinned earlier outputs to the
+    wireframe.
+    """
+    zbuf, _, meta = _rasterise(tris, elev, azim, size)
+    if ground:
+        zbuf = _fill_ground(zbuf, meta, size, ground_roughness)
+
+    covered = np.isfinite(zbuf)
+    near, far = float(zbuf[covered].max()), float(zbuf[covered].min())
+    out = np.zeros((size, size), dtype=np.uint8)
+    if near - far < 1e-9:
+        out[covered] = 255                # perfectly flat, e.g. a single plane
+    else:
+        norm = (zbuf[covered] - far) / (near - far)      # 0 = far, 1 = near
+        # Keep the model clear of the black background so ControlNet does not
+        # confuse the farthest surface with empty space.
+        out[covered] = (32 + norm * 223).astype(np.uint8)
+    return out
+
+
+def rasterise_colour_image(
+    tris: np.ndarray,
+    tri_colours: np.ndarray,
+    elev: float,
+    azim: float,
+    size: int,
+    background: Tuple[int, int, int] = (26, 26, 46),
+) -> np.ndarray:
+    """
+    Opaque shaded render of the same visible surfaces the depth map describes.
+
+    Drawn through the shared z-buffer rather than matplotlib's alpha-blended
+    Poly3DCollection: transparency let back faces show through, so the BIM
+    render's silhouette disagreed with the depth hint the photo was built from.
+    Every face enclosed by edges here is a solid surface in the synthesised
+    photograph.
+    """
+    _, idxbuf, _ = _rasterise(tris, elev, azim, size)
+
+    # Flat Lambert shading per triangle so faces read as separate planes.
+    e1 = tris[:, 1] - tris[:, 0]
+    e2 = tris[:, 2] - tris[:, 0]
+    normals = np.cross(e1, e2)
+    lengths = np.linalg.norm(normals, axis=1, keepdims=True)
+    normals = normals / np.where(lengths < 1e-12, 1.0, lengths)
+    shade = 0.45 + 0.55 * np.abs(normals @ _LIGHT_DIR)
+
+    shaded = np.clip(tri_colours * shade[:, None], 0, 255).astype(np.uint8)
+
+    out = np.empty((size, size, 3), dtype=np.uint8)
+    out[:] = np.array(background, dtype=np.uint8)
+    hit = idxbuf >= 0
+    out[hit] = shaded[idxbuf[hit]]
+    return out
+
+
 class IFCProcessor:
     """Loads an IFC file and produces element metadata + rendered PNG images."""
 
     def __init__(self, config: PipelineConfig) -> None:
         self.config = config
 
+    def _view_angle(self, view_name: str) -> Tuple[float, float]:
+        """(elev, azim) for *view_name*, overridable via config.ifc_view_angles."""
+        override = (self.config.ifc_view_angles or {}).get(view_name)
+        if override and len(override) == 2:
+            return float(override[0]), float(override[1])
+        return _VIEW_ANGLES.get(view_name, (25, -60))
+
     def process(
-        self, ifc_path: Path, render_dir: Optional[Path] = None
-    ) -> Tuple[List[IFCElementInfo], List[Path]]:
+        self,
+        ifc_path: Path,
+        render_dir: Optional[Path] = None,
+        depth_dir: Optional[Path] = None,
+    ) -> Tuple[List[IFCElementInfo], List[Path], List[Optional[Path]]]:
         """
         Parse *ifc_path* and render base views.
 
@@ -83,11 +318,15 @@ class IFCProcessor:
         ifc_path   : path to the IFC file.
         render_dir : directory to save PNG renders into. Defaults to
                      ``config.bim_render_dir`` when not given.
+        depth_dir  : directory to save ControlNet depth maps into. Defaults to
+                     a ``depth/`` sibling of *render_dir*.
 
         Returns
         -------
         elements : list of IFCElementInfo
         render_paths : list of absolute Paths to the saved PNG renders
+        depth_paths : depth map per render, index-aligned with *render_paths*;
+                      an entry is None when rasterisation failed for that view
         """
         try:
             import ifcopenshell  # noqa: PLC0415
@@ -106,8 +345,11 @@ class IFCProcessor:
         logger.info("Extracted %d relevant elements from %s", len(elements), ifc_path.name)
 
         render_dir = render_dir or self.config.bim_render_dir
-        render_paths = self._render_views(ifc_file, ifc_path.stem, elements, render_dir)
-        return elements, render_paths
+        depth_dir = depth_dir or (render_dir.parent / "depth")
+        render_paths, depth_paths = self._render_views(
+            ifc_file, ifc_path.stem, elements, render_dir, depth_dir
+        )
+        return elements, render_paths, depth_paths
 
     def _extract_elements(
         self, ifc_file: Any, model_id: str
@@ -154,10 +396,13 @@ class IFCProcessor:
         model_id: str,
         elements: List[IFCElementInfo],
         render_dir: Path,
-    ) -> List[Path]:
+        depth_dir: Path,
+    ) -> Tuple[List[Path], List[Optional[Path]]]:
         """Render each view into *render_dir* and return the saved PNG paths."""
         render_dir.mkdir(parents=True, exist_ok=True)
+        depth_dir.mkdir(parents=True, exist_ok=True)
         render_paths: List[Path] = []
+        depth_paths: List[Optional[Path]] = []
 
         # Build render groups: [0] the whole model, then one group per
         # IfcSpace (the elements belonging to it), then each element alone.
@@ -165,16 +410,31 @@ class IFCProcessor:
         list_group.append(elements)
 
         # One group per IfcSpace — collect the elements that belong to it.
+        # Sparse groups (a lone wall, a single slab) render as an isolated
+        # fragment on empty ground, which makes a poor training pair.
+        minimum = max(int(self.config.ifc_min_elements_per_group), 1)
         elements_by_gid = {elem.global_id: elem for elem in elements}
+        dropped = 0
         for space in self._iter_spaces(ifc_file):
             space_elements = self._elements_in_space(space, elements_by_gid)
-            if space_elements:
-                list_group.append(space_elements)
+            if not space_elements:
+                continue
+            if len(space_elements) < minimum:
+                dropped += 1
                 logger.debug(
-                    "IfcSpace '%s' -> %d element(s)",
+                    "Skipping IfcSpace '%s' — %d element(s) < ifc_min_elements_per_group=%d",
                     getattr(space, "Name", None) or getattr(space, "GlobalId", "?"),
-                    len(space_elements),
+                    len(space_elements), minimum,
                 )
+                continue
+            list_group.append(space_elements)
+
+        if dropped:
+            logger.info(
+                "Skipped %d sparse space group(s) below ifc_min_elements_per_group=%d",
+                dropped, minimum,
+            )
+        logger.info("Rendering %d group(s)", len(list_group))
 
         for index, group in enumerate(list_group):
             all_tris = self._extract_geometry(ifc_file, group)
@@ -194,8 +454,41 @@ class IFCProcessor:
                         render_paths.append(out_path)
                     except Exception as exc2:
                         logger.error("Fallback render also failed: %s", exc2)
+                        continue
 
-        return render_paths
+                depth_path = depth_dir / f"{model_id}_{index}_{view_name}_depth.png"
+                depth_paths.append(
+                    self._write_depth_map(all_tris, view_name, depth_path)
+                )
+
+        return render_paths, depth_paths
+
+    def _write_depth_map(
+        self,
+        all_tris: List[Tuple[np.ndarray, str]],
+        view_name: str,
+        out_path: Path,
+    ) -> Optional[Path]:
+        """Rasterise and save the depth map for one view; None when unavailable."""
+        if not all_tris:
+            logger.warning("No geometry for '%s' — depth map skipped", out_path.name)
+            return None
+        try:
+            from PIL import Image  # noqa: PLC0415
+
+            elev, azim = self._view_angle(view_name)
+            tris = np.vstack([t for t, _ in all_tris])
+            depth = rasterise_depth_map(
+                tris, elev, azim, self.config.vlm_control_resolution,
+                ground=self.config.vlm_depth_ground_plane,
+                ground_roughness=self.config.vlm_ground_roughness,
+            )
+            Image.fromarray(depth, mode="L").save(str(out_path))
+            logger.info("Saved depth map: %s", out_path.name)
+            return out_path
+        except Exception as exc:
+            logger.warning("Depth map failed for '%s': %s", out_path.name, exc)
+            return None
 
     @staticmethod
     def _iter_spaces(ifc_file: Any) -> List[Any]:
@@ -285,39 +578,31 @@ class IFCProcessor:
         view_name: str,
         out_path: Path,
     ) -> None:
-        import matplotlib  # noqa: PLC0415
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt  # noqa: PLC0415
-        from mpl_toolkits.mplot3d.art3d import Poly3DCollection  # noqa: PLC0415
+        """
+        Opaque shaded render through the shared z-buffer.
 
-        w = self.config.ifc_render_width / 100
-        h = self.config.ifc_render_height / 100
-        fig = plt.figure(figsize=(w, h), dpi=100)
-        ax = fig.add_subplot(111, projection="3d")
-        ax.set_axis_off()
-        fig.patch.set_facecolor("#1a1a2e")
+        This deliberately does not use matplotlib: its alpha-blended
+        Poly3DCollection let back faces show through, so the BIM render showed
+        a different silhouette than the depth map the photo was generated from.
+        Same rasteriser → the visible faces here are exactly the surfaces the
+        synthesised photograph is built on.
+        """
+        from PIL import Image  # noqa: PLC0415
 
         if not all_tris:
             raise ValueError("No triangles to render")
 
-        for tris, colour in all_tris:
-            poly = Poly3DCollection(tris, alpha=0.85)
-            poly.set_facecolor(colour)
-            poly.set_edgecolor("#00000020")
-            ax.add_collection3d(poly)
+        tris = np.vstack([t for t, _ in all_tris])
+        tri_colours = np.vstack([
+            np.repeat(np.array([_hex_to_rgb(colour)], dtype=float), len(t), axis=0)
+            for t, colour in all_tris
+        ])
 
-        # Auto-scale axes
-        all_verts = np.vstack([t.reshape(-1, 3) for t, _ in all_tris])
-        for axis, idx in (("x", 0), ("y", 1), ("z", 2)):
-            lo, hi = all_verts[:, idx].min(), all_verts[:, idx].max()
-            getattr(ax, f"set_{axis}lim")(lo, hi)
-
-        elev, azim = _VIEW_ANGLES.get(view_name, (25, -60))
-        ax.view_init(elev=elev, azim=azim)
-
-        plt.tight_layout(pad=0)
-        fig.savefig(str(out_path), dpi=100, bbox_inches="tight", facecolor=fig.get_facecolor())
-        plt.close(fig)
+        elev, azim = self._view_angle(view_name)
+        rgb = rasterise_colour_image(
+            tris, tri_colours, elev, azim, self.config.ifc_render_width
+        )
+        Image.fromarray(rgb, mode="RGB").save(str(out_path))
 
     def _render_fallback(
         self,

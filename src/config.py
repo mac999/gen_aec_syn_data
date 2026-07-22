@@ -24,6 +24,19 @@ class PipelineConfig:
     ollama_model: str = "llama3:8b-instruct-q4_K_M"
     ollama_base_url: str = "http://localhost:11434"
     ollama_temperature: float = 0.1
+    # Set explicitly so behaviour does not depend on a hand-tuned Modelfile:
+    # Ollama defaults to the model's full trained context (262 144 for qwen3),
+    # which reserves tens of GB of KV cache for a 700-character chunk.
+    ollama_num_ctx: int = 16384
+    # The multi-QA prompt's nested schema runs to ~5 000 tokens; a lower cap
+    # truncates mid-JSON and the reply cannot be parsed.
+    ollama_num_predict: int = 8192
+    # Grammar-enforced JSON. Off by default: on a reasoning model such as
+    # qwen3 the grammar applies to the answer channel while the model spends
+    # its budget in the thinking channel, and the reply comes back empty. The
+    # prompt already asks for JSON and non-reasoning models honour it, so turn
+    # this on only for a model you have checked.
+    ollama_json_mode: bool = False
 
     # Gemini API 
     gemini_api_key: str = ""              # or set GEMINI_API_KEY env var
@@ -43,17 +56,105 @@ class PipelineConfig:
     ifc_views: List[str] = field(
         default_factory=lambda: ["perspective", "top", "front"]
     )
+    # (elev, azim) per view. The default perspective sits low, near eye level —
+    # a steep bird's-eye angle does not read as a site photograph.
+    ifc_view_angles: dict = field(
+        default_factory=lambda: {
+            "perspective": [18, -55],
+            "top": [90, -90],
+            "front": [0, -90],
+            "side": [0, 0],
+        }
+    )
     ifc_max_elements: int = 500  # cap for rendering performance
+    # Space groups smaller than this are not rendered: a lone wall or slab on
+    # empty ground makes a weak training pair. The whole-model group (index 0)
+    # is always kept.
+    ifc_min_elements_per_group: int = 5
 
-    # ComfyUI / VLM 
+    # ComfyUI / VLM
     comfyui_url: str = "http://127.0.0.1:8188"
     comfyui_timeout: int = 300          # seconds to wait per image
-    controlnet_model: str = "control_v11p_sd15_mlsd.pth" # "control_v11p_sd15_canny.pth"
-    sd_base_model: str = "photon_v1.safetensors" # "v1-5-pruned-emaonly.ckpt"
-    i2i_denoise: float = 0.70
-    i2i_steps: int = 23
-    i2i_cfg: float = 7.5
+    controlnet_model: str = "control_v11f1p_sd15_depth.pth"
+    # Base SD 1.5 renders architecture flatly; a photoreal finetune is what
+    # actually makes the output read as a photograph.
+    sd_base_model: str = "Realistic_Vision_V6.0_NV_B1_fp16.safetensors"
+    i2i_denoise: float = 1.00
+    i2i_steps: int = 30
+    i2i_cfg: float = 7.0
     controlnet_strength: float = 0.80
+    controlnet_start_percent: float = 0.0
+    controlnet_end_percent: float = 0.75
+
+    # ── VLM image synthesis ───────────────────────────────────────────────
+    # How the BIM geometry is fed to ControlNet:
+    #   "depth"  — z-buffer depth map rasterised from the IFC mesh (recommended;
+    #              holds the 3-D form while letting the sampler repaint texture)
+    #   "render" — the colour BIM render itself (legacy; tends to leak the
+    #              wireframe look straight into the output)
+    vlm_control_hint: str = "depth"
+    # Only these views get a synthesised photo. An orthographic plan/elevation
+    # has no photographic equivalent, so the sampler re-reads it as a facade —
+    # which is what made "top" outputs look 90 degrees rotated.
+    vlm_photo_views: List[str] = field(default_factory=lambda: ["perspective"])
+    # Fill empty depth-map pixels with an infinite ground plane at the model
+    # base, giving the hint a horizon and a receding floor. Without it the
+    # structure floats in a void and the sampler invents whatever fills it.
+    vlm_depth_ground_plane: bool = True
+    # Undulation added to that ground, as a fraction of the model's depth
+    # range. 0 gives a perfectly flat plane, which renders as a paved slab.
+    vlm_ground_roughness: float = 0.10
+    # False → start from an empty latent so the render's flat shading cannot
+    # bleed through. True → img2img from the BIM render (needs i2i_denoise < 1).
+    vlm_init_from_render: bool = False
+    vlm_image_width: int = 768
+    vlm_image_height: int = 768
+    vlm_control_resolution: int = 512   # depth-map raster size fed to ControlNet
+    vlm_sampler: str = "dpmpp_2m"
+    vlm_scheduler: str = "karras"
+    vlm_seed: int = -1                  # -1 → derive a fresh seed per image
+
+    # Prompts. {project_type}, {trade_type} and {view_type} are substituted.
+    # Lead with the photograph and the concrete. Rebar is kept to a single
+    # subordinate mention on purpose — promoting it makes the sampler tile
+    # the whole frame with wire mesh.
+    # Ground and concrete colour are both stated explicitly: "earth" alone
+    # drifts to desert dunes, which then tint the concrete sand-coloured.
+    vlm_positive_prompt: str = (
+        "photograph of a {trade_type} building under construction on a "
+        "{project_type} site, bare grey structural concrete frame, "
+        "cool grey board-formed concrete walls and floor slabs, "
+        "plywood formwork panels, a few steel props and scaffold towers, "
+        "some starter rebar at slab edges, "
+        "standing on dark brown compacted earth, damp churned soil with tyre ruts, "
+        "patches of gravel and mud, construction dust and dirt, "
+        "soft flat overcast daylight, natural muted colours, "
+        "realistic photo, sharp focus, high detail, 35mm lens, "
+        "architectural documentary photography"
+    )
+    # Five families matter: the desert drift, paved ground (the analytic ground
+    # plane is a smooth surface, so it reads as concrete unless pushed), the
+    # CAD look, the demolition drift, and the wire-mesh wallpaper.
+    vlm_negative_prompt: str = (
+        "desert, sand dunes, beach, arid landscape, sandy ground, "
+        "beige concrete, sand-coloured walls, "
+        "concrete pavement, paved plaza, asphalt, smooth flat floor, "
+        "polished slab, tiled floor, clean swept ground, lawn, grass, "
+        "wire mesh, chain link fence, dense grid, lattice, net, cage, "
+        "repeating pattern, wall of rebar, forest of steel bars, "
+        "clouds, dramatic sky, sunset, sunbeam, lens flare, "
+        "ruins, rubble, demolition, collapsed structure, derelict, "
+        "abandoned building, war damage, crumbling cracked concrete, "
+        "3d render, cgi, rendering, wireframe, blueprint, cad drawing, diagram, "
+        "illustration, drawing, painting, cartoon, anime, sketch, "
+        "smooth plastic surface, glossy, chrome, metallic sheen, mirror, "
+        "people, workers, animals, vehicles, "
+        "text, watermark, logo, signature, "
+        "floating objects, surreal, fantasy, distorted geometry, "
+        "low quality, blurry, jpeg artifacts, oversaturated, neon colours"
+    )
+    # Optional per-trade prompt fragment appended to the positive prompt.
+    vlm_trade_prompts: dict = field(default_factory=dict)
 
     # Processing limits 
     max_samples_per_doc: int = 50
@@ -61,6 +162,12 @@ class PipelineConfig:
 
     # LLM retry logic 
     llm_max_retries: int = 3
+
+    # DAPT corpus 
+    # Fill source_type/source_org/source_date/project_type/domain_tags/license
+    # with one Ollama call per document; they shipped empty otherwise.
+    dapt_infer_metadata: bool = True
+    dapt_dedupe: bool = True              # drop repeated chunks by raw_hash
 
     def __post_init__(self) -> None:
         if isinstance(self.input_dir, str):
