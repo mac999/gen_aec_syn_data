@@ -2,31 +2,81 @@
   "input_dir": "input",
   "output_dir": "output",
   "dataset_mode": "both",
-  "llm_backend": "gemini",
+  "llm_backend": "ollama",
   "llm_parallel": 1,
   "qa_per_chunk": 3,
-  "ollama_model": "mistral:7b-instruct-q4_K_M",
+  "ollama_model": "qwen3:30b-a3b",
   "ollama_base_url": "http://localhost:11434",
   "ollama_temperature": 0.1,
+  "ollama_num_ctx": 16384,
+  "ollama_num_predict": 8192,
+  "ollama_json_mode": false,
   "gemini_api_key": "",
   "gemini_model": "gemini-2.5-flash",
   "llama_server_url": "http://localhost:8080",
   "chunk_min_size": 500,
   "chunk_max_size": 700,
   "chunk_overlap": 200,
-  "llm_max_retries": 3,
   "ifc_render_width": 1024,
   "ifc_render_height": 1024,
-  "ifc_views": ["perspective", "top", "front"],
+  "ifc_views": [
+    "perspective",
+    "top",
+    "front"
+  ],
+  "ifc_view_angles": {
+    "perspective": [
+      18,
+      -55
+    ],
+    "top": [
+      90,
+      -90
+    ],
+    "front": [
+      0,
+      -90
+    ],
+    "side": [
+      0,
+      0
+    ]
+  },
   "ifc_max_elements": 500,
+  "ifc_min_elements_per_group": 5,
   "comfyui_url": "http://127.0.0.1:8188",
   "comfyui_timeout": 300,
-  "controlnet_model": "control_v11p_sd15_mlsd.pth",
-  "sd_base_model": "photon_v1.safetensors",
-  "i2i_denoise": 0.7,
-  "i2i_steps": 23,
-  "i2i_cfg": 7.5,
+  "controlnet_model": "control_v11f1p_sd15_depth.pth",
+  "sd_base_model": "Realistic_Vision_V6.0_NV_B1_fp16.safetensors",
+  "i2i_denoise": 1.0,
+  "i2i_steps": 30,
+  "i2i_cfg": 7.0,
   "controlnet_strength": 0.8,
+  "controlnet_start_percent": 0.0,
+  "controlnet_end_percent": 0.75,
+  "vlm_control_hint": "depth",
+  "vlm_photo_views": [
+    "perspective"
+  ],
+  "vlm_depth_ground_plane": true,
+  "vlm_ground_roughness": 0.1,
+  "vlm_init_from_render": false,
+  "vlm_image_width": 768,
+  "vlm_image_height": 768,
+  "vlm_control_resolution": 512,
+  "vlm_sampler": "dpmpp_2m",
+  "vlm_scheduler": "karras",
+  "vlm_seed": -1,
+  "vlm_positive_prompt": "photograph of a {trade_type} building under construction on a {project_type} site, bare grey structural concrete frame, cool grey board-formed concrete walls and floor slabs, plywood formwork panels, a few steel props and scaffold towers, some starter rebar at slab edges, standing on dark brown compacted earth, damp churned soil with tyre ruts, patches of gravel and mud, construction dust and dirt, soft flat overcast daylight, natural muted colours, realistic photo, sharp focus, high detail, 35mm lens, architectural documentary photography",
+  "vlm_negative_prompt": "desert, sand dunes, beach, arid landscape, sandy ground, beige concrete, sand-coloured walls, concrete pavement, paved plaza, asphalt, smooth flat floor, polished slab, tiled floor, clean swept ground, lawn, grass, wire mesh, chain link fence, dense grid, lattice, net, cage, repeating pattern, wall of rebar, forest of steel bars, clouds, dramatic sky, sunset, sunbeam, lens flare, ruins, rubble, demolition, collapsed structure, derelict, abandoned building, war damage, crumbling cracked concrete, 3d render, cgi, rendering, wireframe, blueprint, cad drawing, diagram, illustration, drawing, painting, cartoon, anime, sketch, smooth plastic surface, glossy, chrome, metallic sheen, mirror, people, workers, animals, vehicles, text, watermark, logo, signature, floating objects, surreal, fantasy, distorted geometry, low quality, blurry, jpeg artifacts, oversaturated, neon colours",
+  "vlm_trade_prompts": {
+    "철근콘크리트": "cast-in-place reinforced concrete, rebar cages, tie wire, concrete cold joints",
+    "강구조": "structural steel frame, bolted connections, primer-coated steel beams",
+    "복합구조": "mixed concrete and steel structure, composite deck"
+  },
   "max_samples_per_doc": 50,
-  "batch_size": 5
+  "batch_size": 5,
+  "llm_max_retries": 3,
+  "dapt_infer_metadata": true,
+  "dapt_dedupe": true
 }

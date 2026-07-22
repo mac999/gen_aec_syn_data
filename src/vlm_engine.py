@@ -3,11 +3,21 @@ VLM synthesis engine — ComfyUI headless API integration.
 
 Workflow
 --------
-1. Upload a BIM render PNG to the ComfyUI `/upload/image` endpoint.
-2. Submit a ControlNet-Canny + SD-1.5 img2img workflow via `/prompt`.
+1. Upload the ControlNet hint (a depth map rasterised from the IFC mesh) to
+   the ComfyUI `/upload/image` endpoint.
+2. Submit a ControlNet + SD-1.5 workflow via `/prompt`.
 3. Poll `/history/{prompt_id}` until the job finishes.
 4. Download the synthetic site-photo output via `/view`.
 5. Pair (bim_render, site_photo, IFC metadata) into a VLMSample and write JSONL.
+
+Why the geometry is carried by ControlNet and not by img2img
+-----------------------------------------------------------
+Starting the sampler from the BIM render (img2img at denoise < 1) leaves part
+of the render's flat shading in the final latent, so outputs came back as
+recoloured wireframes rather than photographs. The BIM form is therefore held
+by a ControlNet depth hint while the latent starts empty, which lets the prompt
+decide every surface. Set ``vlm_init_from_render`` to restore the old
+behaviour.
 
 If ComfyUI is unreachable the engine falls back to copying the BIM render as
 the "site photo" so the pipeline can still produce structurally-valid VLM
@@ -19,6 +29,7 @@ import json
 import logging
 import time
 import uuid
+import zlib
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -28,98 +39,91 @@ from .schemas import IFCElementInfo, VLMMetadata, VLMOutput, VLMSample
 
 logger = logging.getLogger("AEC_Pipeline.vlm_engine")
 
-# ComfyUI workflow template (SD1.5 + ControlNet Canny img2img) 
+def _fmt_prompt(template: str, **fields: str) -> str:
+    """Substitute {project_type}/{trade_type}/{view_type} without dying on typos."""
+    try:
+        return template.format(**fields)
+    except (KeyError, IndexError, ValueError) as exc:
+        logger.warning(
+            "Prompt template contains an unknown placeholder (%s) — "
+            "using it verbatim. Valid names: %s",
+            exc, ", ".join(sorted(fields)),
+        )
+        return template
+
+
 def _build_comfyui_workflow(
-    uploaded_image_name: str,
+    control_image_name: str,
     sd_model: str,
     controlnet_model: str,
-    denoise: float,
+    positive: str,
+    negative: str,
+    width: int,
+    height: int,
     steps: int,
     cfg: float,
+    sampler: str,
+    scheduler: str,
+    denoise: float,
     controlnet_strength: float,
     seed: int,
-    use_canny_preprocessor: bool = True,
+    control_start: float = 0.0,
+    control_end: float = 1.0,
+    init_image_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Return a ComfyUI API-format workflow dict.
 
-    When *use_canny_preprocessor* is False (CannyEdgePreprocessor node not
-    installed), the raw loaded image is fed directly into ControlNetApply
-    instead of going through edge detection first.
+    The ControlNet hint (node "1") is scaled to the generation size and drives
+    the structure. When *init_image_name* is given the sampler starts from that
+    image instead of an empty latent, which only makes sense with
+    ``denoise`` < 1.
     """
-    # Node "2" is either a CannyEdgePreprocessor or a passthrough identity.
-    # The ControlNetApply node always reads from node "2" output index 0.
-    if use_canny_preprocessor:
-        node_2: Dict[str, Any] = {
-            "class_type": "CannyEdgePreprocessor",
-            "inputs": {
-                "image": ["1", 0],
-                "low_threshold": 100,
-                "high_threshold": 200,
-                "resolution": 512,
-            },
-        }
-    else:
-        # ImageScale acts as a passthrough at 1:1 ratio — universally available
-        node_2 = {
+    workflow: Dict[str, Any] = {
+        "1": {
+            "class_type": "LoadImage",
+            "inputs": {"image": control_image_name},
+        },
+        # Match the hint to the latent resolution; a mismatched hint gets
+        # stretched internally and blurs the structure it is meant to pin.
+        "2": {
             "class_type": "ImageScale",
             "inputs": {
                 "image": ["1", 0],
-                "upscale_method": "nearest-exact",
-                "width": 512,
-                "height": 512,
+                "upscale_method": "bilinear",
+                "width": width,
+                "height": height,
                 "crop": "disabled",
             },
-        }
-
-    return {
-        "1": {
-            "class_type": "LoadImage",
-            "inputs": {"image": uploaded_image_name},
         },
-        "2": node_2,
         "3": {
             "class_type": "CheckpointLoaderSimple",
             "inputs": {"ckpt_name": sd_model},
         },
         "4": {
             "class_type": "CLIPTextEncode",
-            "inputs": {
-                "clip": ["3", 1],
-                "text": (
-                    "construction site, realistic photograph, "
-                    "high detail, professional photography"
-                ),
-            },
+            "inputs": {"clip": ["3", 1], "text": positive},
         },
         "5": {
             "class_type": "CLIPTextEncode",
-            "inputs": {
-                "clip": ["3", 1],
-                "text": (
-                    "blurry, cartoon, drawing, illustration, "
-                    "low quality, watermark, text, logo, sky, clouds, people, animals"
-                ),
-            },
+            "inputs": {"clip": ["3", 1], "text": negative},
         },
         "6": {
             "class_type": "ControlNetLoader",
             "inputs": {"control_net_name": controlnet_model},
         },
+        # Advanced apply so the hint can be released before the last steps —
+        # holding it to 100% keeps surfaces looking like shaded geometry.
         "7": {
-            "class_type": "ControlNetApply",
+            "class_type": "ControlNetApplyAdvanced",
             "inputs": {
-                "conditioning": ["4", 0],
+                "positive": ["4", 0],
+                "negative": ["5", 0],
                 "control_net": ["6", 0],
                 "image": ["2", 0],
                 "strength": controlnet_strength,
-            },
-        },
-        "8": {
-            "class_type": "VAEEncode",
-            "inputs": {
-                "pixels": ["1", 0],
-                "vae": ["3", 2],
+                "start_percent": control_start,
+                "end_percent": control_end,
             },
         },
         "9": {
@@ -127,31 +131,52 @@ def _build_comfyui_workflow(
             "inputs": {
                 "model": ["3", 0],
                 "positive": ["7", 0],
-                "negative": ["5", 0],
+                "negative": ["7", 1],
                 "latent_image": ["8", 0],
                 "seed": seed,
                 "steps": steps,
                 "cfg": cfg,
-                "sampler_name": "euler_ancestral",
-                "scheduler": "normal",
+                "sampler_name": sampler,
+                "scheduler": scheduler,
                 "denoise": denoise,
             },
         },
         "10": {
             "class_type": "VAEDecode",
-            "inputs": {
-                "samples": ["9", 0],
-                "vae": ["3", 2],
-            },
+            "inputs": {"samples": ["9", 0], "vae": ["3", 2]},
         },
         "11": {
             "class_type": "SaveImage",
-            "inputs": {
-                "images": ["10", 0],
-                "filename_prefix": "site_photo",
-            },
+            "inputs": {"images": ["10", 0], "filename_prefix": "site_photo"},
         },
     }
+
+    if init_image_name:
+        workflow["12"] = {
+            "class_type": "LoadImage",
+            "inputs": {"image": init_image_name},
+        }
+        workflow["13"] = {
+            "class_type": "ImageScale",
+            "inputs": {
+                "image": ["12", 0],
+                "upscale_method": "bilinear",
+                "width": width,
+                "height": height,
+                "crop": "disabled",
+            },
+        }
+        workflow["8"] = {
+            "class_type": "VAEEncode",
+            "inputs": {"pixels": ["13", 0], "vae": ["3", 2]},
+        }
+    else:
+        workflow["8"] = {
+            "class_type": "EmptyLatentImage",
+            "inputs": {"width": width, "height": height, "batch_size": 1},
+        }
+
+    return workflow
 
 
 class VLMEngine:
@@ -165,7 +190,6 @@ class VLMEngine:
         self._comfyui_available: Optional[bool] = None
         self._resolved_controlnet: Optional[str] = None
         self._resolved_checkpoint: Optional[str] = None
-        self._canny_node_available: Optional[bool] = None
         self._sample_counter = 0
 
         # Output locations are set per input file via set_output_dir(); the
@@ -173,19 +197,22 @@ class VLMEngine:
         self.output_root = self.config.vlm_output_dir
         self.bim_render_dir = self.config.bim_render_dir
         self.site_photo_dir = self.config.site_photo_dir
+        self.depth_map_dir = self.config.vlm_output_dir / "images" / "depth"
         self.jsonl_path = self.config.vlm_output_dir / "vlm_training_data.jsonl"
 
     def set_output_dir(self, out_dir: Path) -> None:
         """
         Point all VLM outputs under *out_dir* (created if missing):
           - <out_dir>/images/bim_render/   (BIM renders)
+          - <out_dir>/images/depth/        (ControlNet depth hints)
           - <out_dir>/images/site_photo/   (synthesised site photos)
           - <out_dir>/vlm_training_data.jsonl
         """
         self.output_root = out_dir
         self.bim_render_dir = out_dir / "images" / "bim_render"
         self.site_photo_dir = out_dir / "images" / "site_photo"
-        for d in (self.bim_render_dir, self.site_photo_dir):
+        self.depth_map_dir = out_dir / "images" / "depth"
+        for d in (self.bim_render_dir, self.site_photo_dir, self.depth_map_dir):
             d.mkdir(parents=True, exist_ok=True)
         self.jsonl_path = out_dir / "vlm_training_data.jsonl"
 
@@ -196,18 +223,40 @@ class VLMEngine:
         model_id: str,
         project_type: str = "건물",
         trade_type: str = "철근콘크리트",
+        depth_paths: Optional[List[Optional[Path]]] = None,
     ) -> int:
         """
         For each BIM render, synthesise a site photo and write a VLMSample.
+
+        *depth_paths* is index-aligned with *render_paths*; where an entry is
+        missing the colour render is used as the ControlNet hint instead.
 
         Returns the number of successfully written samples.
         """
         successful = 0
         elem_ids = [e.global_id for e in elements[:10]]  # cap to 10
+        depths = depth_paths or []
+        photo_views = self.config.vlm_photo_views
+        skipped: Dict[str, int] = {}
 
-        for render_path in render_paths:
+        for index, render_path in enumerate(render_paths):
             view_name = render_path.stem.split("_")[-1]
-            site_photo_path = self._synthesise_site_photo(render_path)
+            depth_path = depths[index] if index < len(depths) else None
+
+            # An orthographic plan or elevation has no photographic equivalent:
+            # asked for a "photo" of a top view the sampler stands the slab up
+            # and paints it as a facade, which reads as a 90-degree rotation.
+            if photo_views and view_name not in photo_views:
+                skipped[view_name] = skipped.get(view_name, 0) + 1
+                continue
+
+            site_photo_path = self._synthesise_site_photo(
+                render_path,
+                depth_path=depth_path,
+                project_type=project_type,
+                trade_type=trade_type,
+                view_type=view_name,
+            )
 
             if site_photo_path is None:
                 logger.warning("Skipping render %s — site photo synthesis failed", render_path.name)
@@ -224,20 +273,67 @@ class VLMEngine:
             self._append_sample(sample)
             successful += 1
 
+        if skipped:
+            logger.info(
+                "Skipped %d render(s) not in vlm_photo_views=%s: %s",
+                sum(skipped.values()), photo_views,
+                ", ".join(f"{v}×{n}" for v, n in sorted(skipped.items())),
+            )
         return successful
 
-    def _synthesise_site_photo(self, render_path: Path) -> Optional[Path]:
+    def _synthesise_site_photo(
+        self,
+        render_path: Path,
+        depth_path: Optional[Path] = None,
+        project_type: str = "건물",
+        trade_type: str = "철근콘크리트",
+        view_type: str = "perspective",
+    ) -> Optional[Path]:
         """
         Try ComfyUI synthesis; fall back to a direct copy of the BIM render.
         """
         if self._is_comfyui_available():
-            result = self._run_comfyui(render_path)
+            result = self._run_comfyui(
+                render_path,
+                depth_path=depth_path,
+                project_type=project_type,
+                trade_type=trade_type,
+                view_type=view_type,
+            )
             if result:
                 return result
             logger.warning("ComfyUI synthesis failed — using BIM render as fallback.")
 
         # Fallback: copy the BIM render as the site photo
         return self._copy_as_site_photo(render_path)
+
+    def _control_image(self, render_path: Path, depth_path: Optional[Path]) -> Path:
+        """Pick the image that will condition ControlNet."""
+        if self.config.vlm_control_hint == "depth":
+            if depth_path and depth_path.exists():
+                return depth_path
+            logger.warning(
+                "vlm_control_hint='depth' but no depth map for %s — falling back to "
+                "the colour render, which conditions far more weakly.",
+                render_path.name,
+            )
+        return render_path
+
+    def _prompts(
+        self, project_type: str, trade_type: str, view_type: str
+    ) -> Tuple[str, str]:
+        """Resolve the configured prompt templates for one image."""
+        fields = {
+            "project_type": project_type,
+            "trade_type": trade_type,
+            "view_type": view_type,
+        }
+        positive = _fmt_prompt(self.config.vlm_positive_prompt, **fields)
+        extra = (self.config.vlm_trade_prompts or {}).get(trade_type)
+        if extra:
+            positive = f"{positive}, {_fmt_prompt(extra, **fields)}"
+        negative = _fmt_prompt(self.config.vlm_negative_prompt, **fields)
+        return positive, negative
 
     def _is_comfyui_available(self) -> bool:
         if self._comfyui_available is not None:
@@ -297,16 +393,24 @@ class VLMEngine:
             )
             return False
 
-        # Prefer canny-related model matching the configured name; fall back
-        # to first canny model found; then first model of any kind.
+        # Prefer the configured name; then any model matching the hint type we
+        # actually produce (a depth hint through a canny ControlNet conditions
+        # on the wrong signal); then anything installed.
         preferred = self.config.controlnet_model.lower()
-        canny_models = [m for m in available if "canny" in m.lower()]
+        hint = self.config.vlm_control_hint.lower()
+        hint_models = [m for m in available if hint in m.lower()]
         if preferred in [m.lower() for m in available]:
             selected_cn = next(m for m in available if m.lower() == preferred)
-        elif canny_models:
-            selected_cn = canny_models[0]
+        elif hint_models:
+            selected_cn = hint_models[0]
         else:
             selected_cn = available[0]
+            logger.warning(
+                "No ControlNet matching hint type '%s' is installed — '%s' will be "
+                "conditioned on a signal it was not trained for, so the BIM form "
+                "may not be held.",
+                hint, selected_cn,
+            )
 
         if selected_cn != self.config.controlnet_model:
             logger.warning(
@@ -357,23 +461,23 @@ class VLMEngine:
             )
         self._resolved_checkpoint = selected_ckpt
 
-        # ── CannyEdgePreprocessor availability ────────────────────────────
-        try:
-            info = self._fetch_object_info("CannyEdgePreprocessor")
-            self._canny_node_available = "CannyEdgePreprocessor" in info
-        except Exception:
-            self._canny_node_available = False
-
-        if not self._canny_node_available:
-            logger.warning(
-                "CannyEdgePreprocessor node not found — the raw BIM render will be "
-                "passed directly to ControlNet. Install comfyui_controlnet_aux for "
-                "better results: https://github.com/Fannovel16/comfyui_controlnet_aux"
-            )
-
         return True
 
-    def _run_comfyui(self, render_path: Path) -> Optional[Path]:
+    def _seed_for(self, stem: str) -> int:
+        """Configured seed, or a stable per-image one so views stay distinct."""
+        if self.config.vlm_seed >= 0:
+            return self.config.vlm_seed
+        # Deterministic in the image name: reruns reproduce, siblings differ.
+        return zlib.crc32(stem.encode("utf-8")) & 0x7FFFFFFF
+
+    def _run_comfyui(
+        self,
+        render_path: Path,
+        depth_path: Optional[Path] = None,
+        project_type: str = "건물",
+        trade_type: str = "철근콘크리트",
+        view_type: str = "perspective",
+    ) -> Optional[Path]:
         """Full ComfyUI pipeline: upload → queue → poll → download."""
         try:
             if not self._resolve_models():
@@ -383,21 +487,40 @@ class VLMEngine:
                 )
                 return None
 
-            uploaded_name = self._upload_image(render_path)
-            if not uploaded_name:
+            control_path = self._control_image(render_path, depth_path)
+            control_name = self._upload_image(control_path)
+            if not control_name:
                 return None
 
-            seed = 145881275571499 # int(uuid.uuid4().int & 0xFFFFFFFF)
+            init_name = None
+            if self.config.vlm_init_from_render:
+                init_name = (
+                    control_name
+                    if control_path == render_path
+                    else self._upload_image(render_path)
+                )
+                if not init_name:
+                    return None
+
+            positive, negative = self._prompts(project_type, trade_type, view_type)
             workflow = _build_comfyui_workflow(
-                uploaded_image_name=uploaded_name,
+                control_image_name=control_name,
                 sd_model=self._resolved_checkpoint,
                 controlnet_model=self._resolved_controlnet,
-                denoise=self.config.i2i_denoise,
+                positive=positive,
+                negative=negative,
+                width=self.config.vlm_image_width,
+                height=self.config.vlm_image_height,
                 steps=self.config.i2i_steps,
                 cfg=self.config.i2i_cfg,
+                sampler=self.config.vlm_sampler,
+                scheduler=self.config.vlm_scheduler,
+                denoise=self.config.i2i_denoise,
                 controlnet_strength=self.config.controlnet_strength,
-                seed=seed,
-                use_canny_preprocessor=self._canny_node_available,
+                seed=self._seed_for(render_path.stem),
+                control_start=self.config.controlnet_start_percent,
+                control_end=self.config.controlnet_end_percent,
+                init_image_name=init_name,
             )
 
             client_id = str(uuid.uuid4())
@@ -468,7 +591,9 @@ class VLMEngine:
             logger.error("Image download failed: %s", resp.status_code)
             return None
 
-        out_path = self.site_photo_dir / f"{stem}_site.jpg"
+        # ComfyUI's SaveImage emits PNG; naming it .jpg made every file lie
+        # about its format.
+        out_path = self.site_photo_dir / f"{stem}_site.png"
         out_path.write_bytes(resp.content)
         logger.info("Site photo saved: %s", out_path.name)
         return out_path

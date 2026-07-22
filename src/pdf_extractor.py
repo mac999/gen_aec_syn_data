@@ -9,6 +9,68 @@ from .schemas import DocumentChunk
 
 logger = logging.getLogger("AEC_Pipeline.pdf_extractor")
 
+# Dot/middle-dot leaders used by Korean tables of contents.
+_LEADER_RE = re.compile(r"[.·․‥…]{4,}")
+# A line holding nothing but a page number, possibly bracketed.
+_PAGE_ONLY_RE = re.compile(r"^[\s\-–—()\[\]]*\d{1,4}[\s\-–—()\[\]]*$")
+_CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+_HANGUL_RE = re.compile(r"[가-힣]")
+
+
+def normalise_pdf_text(text: str) -> str:
+    """
+    Clean one page of PyMuPDF output before it reaches the chunker.
+
+    The important case is vertically-set text: PyMuPDF emits a title like
+    "국토교통부" as five separate one-character lines, which the chunker then
+    carries verbatim into both the DAPT corpus and the LLM prompt. Runs of
+    single-character lines are folded back into one line.
+    """
+    text = _CTRL_RE.sub("", text.replace(" ", " "))
+
+    out: List[str] = []
+    run: List[str] = []
+
+    def flush_run() -> None:
+        if not run:
+            return
+        # 3+ consecutive single-character lines is vertical typesetting, not
+        # prose; anything shorter is left alone so real short lines survive.
+        out.append("".join(run) if len(run) >= 3 else "\n".join(run))
+        run.clear()
+
+    for raw_line in text.splitlines():
+        line = _LEADER_RE.sub(" ", raw_line).strip()
+        if not line or _PAGE_ONLY_RE.match(line):
+            flush_run()
+            out.append("")
+            continue
+        if len(line) == 1:
+            run.append(line)
+            continue
+        flush_run()
+        out.append(re.sub(r"[ \t]{2,}", " ", line))
+
+    flush_run()
+    cleaned = "\n".join(out)
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
+def is_informative(text: str, min_hangul: int = 20) -> bool:
+    """
+    Reject chunks that carry no trainable prose.
+
+    Table-of-contents fragments and page furniture survive chunking as strings
+    of numbers and punctuation; they add noise to DAPT and make the SFT model
+    invent questions no document can answer.
+    """
+    if len(text) < 40:
+        return False
+    if len(_HANGUL_RE.findall(text)) < min_hangul:
+        return False
+    alnum_or_hangul = sum(c.isalnum() or "가" <= c <= "힣" for c in text)
+    return alnum_or_hangul / max(len(text), 1) >= 0.5
+
 
 class PDFExtractor:
     """Extracts and chunks text from a PDF file using PyMuPDF."""
@@ -40,7 +102,7 @@ class PDFExtractor:
         raw_pages: List[tuple[int, str]] = []  # (page_num, text)
         with fitz.open(str(pdf_path)) as doc:
             for page_num, page in enumerate(doc, start=1):
-                text = page.get_text("text")
+                text = normalise_pdf_text(page.get_text("text"))
                 if text.strip():
                     raw_pages.append((page_num, text))
 
@@ -50,10 +112,19 @@ class PDFExtractor:
 
         full_text_with_pages = self._join_pages(raw_pages)
         chunks = list(self._chunk_text(doc_id, full_text_with_pages))
-        logger.info(
-            "Created %d chunks from '%s'", len(chunks), pdf_path.name
-        )
-        return chunks
+
+        kept = [c for c in chunks if is_informative(c.text)]
+        if len(kept) != len(chunks):
+            logger.info(
+                "Dropped %d non-informative chunk(s) (TOC/page furniture) from '%s'",
+                len(chunks) - len(kept), pdf_path.name,
+            )
+        # Renumber so chunk_index stays contiguous after filtering.
+        for new_index, chunk in enumerate(kept):
+            chunk.chunk_index = new_index
+
+        logger.info("Created %d chunks from '%s'", len(kept), pdf_path.name)
+        return kept
 
     @staticmethod
     def _join_pages(

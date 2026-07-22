@@ -27,6 +27,8 @@ The pipeline that ingests AEC source documents and 3D BIM models (IFC) to automa
 - [Usage](#usage)
 - [Output Schema](#output-schema)
 - [Configuration](#configuration)
+- [Depth-conditioned site-photo synthesis](#depth-conditioned-site-photo-synthesis)
+- [Revision History](#revision-history)
 - [License](#license)
 - [Developer](#developer)
 
@@ -42,12 +44,15 @@ This pipeline automates the full synthesis loop:
                                  ┌─ SFT  ─► QA pairs   (LLM)    ─► output/<pdf>_sft/sllm_training_data.jsonl
 PDF Documents  ──►  Text Chunks ─┤
                                  └─ DAPT ─► raw corpus (no LLM) ─► output/<pdf>_dapt/dapt_training_data.jsonl
-IFC 3D Models  ──►  BIM Renders  ──►  ComfyUI I2I              ─► output/<ifc>_vlm/vlm_training_data.jsonl + Images
+IFC 3D Models  ──►  BIM Renders + Depth Maps ──► ComfyUI ControlNet ─► output/<ifc>_vlm/vlm_training_data.jsonl + Images
 ```
 
 Each input file gets its own output folder named `<input-file-stem>_<sft|dapt|vlm>` under `output/`.
 
-Local inference runs on a single machine with **8 GB VRAM** (tested on NVIDIA RTX-class mobile workstation GPUs).
+Local inference runs on a single machine. The sLLM branch scales with whatever
+the host can hold — an 8 GB VRAM GPU runs a 7B model, while a large-unified-memory
+host such as an NVIDIA DGX Spark (GB10, 128 GB) runs a 30B MoE model like
+`qwen3:30b-a3b`. The VLM branch needs ~4 GB for SD 1.5 + ControlNet.
 Three LLM backends are supported for SFT synthesis:
 
 - **Ollama** — easiest local setup
@@ -67,12 +72,14 @@ All settings have defaults in **`config.json`**, overridable per run by CLI flag
 
 | Feature                      | Detail                                                                                        |
 | ---------------------------- | --------------------------------------------------------------------------------------------- |
-| **PDF Extraction**     | PyMuPDF-based paragraph-aware chunking                                                         |
-| **SFT / DAPT Modes**   | `--dataset sft\|dapt\|both` — QA pairs (LLM) and/or raw domain corpus (no LLM)               |
-| **sLLM Synthesis**     | Ollama, llama-server, or Gemini backend — multi-QA per chunk, JSON-enforced, parallel workers |
+| **PDF Extraction**     | PyMuPDF paragraph-aware chunking + text normalisation (vertical-type folding, TOC/page-furniture removal) |
+| **SFT / DAPT Modes**   | `--dataset sft\|dapt\|both` — QA pairs (LLM) and/or raw domain corpus                        |
+| **sLLM Synthesis**     | Ollama, llama-server, or Gemini backend — multi-QA per chunk, explicit context/output limits  |
 | **Multi-QA per Chunk** | Single LLM call generates N QA pairs from one chunk (`--qa-per-chunk N`)                    |
+| **DAPT Enrichment**    | Document metadata (`source_type`, `source_org`, `source_date`, `project_type`, `domain_tags`) inferred once per document; `section_path` tracked; duplicates dropped by `raw_hash` |
 | **IFC Parsing**        | IfcOpenShell element metadata extraction + multi-view 3D renders                              |
-| **VLM Synthesis**      | ComfyUI headless API — ControlNet Canny/Depth + SD 1.5 img2img                               |
+| **Shared Rasteriser**  | BIM render and ControlNet depth map come from one z-buffer pass — pixel-identical silhouettes |
+| **VLM Synthesis**      | ComfyUI headless API — depth ControlNet + photoreal SD 1.5, generated from an empty latent   |
 | **Schema Compliance**  | Pydantic-validated JSONL (Tulu-3 SFT + MMFineReason-SFT compatible)                           |
 | **Config & Secrets**   | `config.json` defaults + `--config`/`--save-config`; API keys loaded from `.env`        |
 | **Graceful Fallback**  | Pipeline continues even when a backend or ComfyUI is unreachable                              |
@@ -99,15 +106,16 @@ gen_aec_syn_data/
 │   └── <ifc-stem>_vlm/
 │       ├── vlm_training_data.jsonl
 │       └── images/
-│           ├── bim_render/
-│           └── site_photo/
+│           ├── bim_render/          # colour render
+│           ├── depth/               # ControlNet depth hint
+│           └── site_photo/          # synthesised photograph
 └── src/
     ├── config.py            # PipelineConfig dataclass + config.json loader
     ├── schemas.py           # Pydantic schemas — SFTSample, DAPTSample, VLMSample
     ├── pdf_extractor.py     # PyMuPDF chunker
-    ├── ifc_processor.py     # IfcOpenShell + matplotlib renderer
+    ├── ifc_processor.py     # IfcOpenShell + z-buffer renderer / depth rasteriser
     ├── sllm_sft_engine.py   # SFT synthesis — Ollama / llama-server / Gemini
-    ├── sllm_dapt_engine.py  # DAPT corpus builder (no LLM)
+    ├── sllm_dapt_engine.py  # DAPT corpus builder + document metadata inference
     ├── vlm_engine.py        # ComfyUI REST API client
     └── pipeline.py          # Top-level orchestrator
 ```
@@ -140,13 +148,27 @@ ollama serve
 # Ollama listens on http://localhost:11434 by default
 ```
 
-**Pull the recommended model** (4-bit quantised, fits in 8 GB VRAM)
+**Pull a model**
 
 ```bash
+# Default in config.json — MoE, 30B total but only 3B active per token, so it
+# runs at roughly 7B speed while holding 30B-class quality. ~18 GB.
+ollama pull qwen3:30b-a3b
+
+# Smaller hosts (8 GB VRAM class)
 ollama pull llama3:8b-instruct-q4_K_M
 ```
 
-> Other compatible models: `mistral:7b-instruct-q4_K_M`, `qwen2:7b-instruct-q4_K_M`
+> On memory-bandwidth-bound hardware (unified-memory hosts such as DGX Spark),
+> prefer a **MoE** model: decode speed tracks the *active* parameter count, not
+> the total. A dense 70B fits in 128 GB but decodes several times slower than a
+> 30B MoE with 3B active.
+>
+> Other compatible models: `gpt-oss:20b`, `qwen3-coder:30b`,
+> `mistral:7b-instruct-q4_K_M`.
+>
+> **Reasoning models** (qwen3, gpt-oss): leave `ollama_json_mode` at `false`.
+> See [Ollama generation limits](#ollama-generation-limits).
 
 Verify the server is running:
 
@@ -276,7 +298,7 @@ python main.py --backend gemini --gemini-model gemini-2.5-flash --pdf input/regu
 
 ### 4. ComfyUI (Image Synthesis)
 
-ComfyUI drives the ControlNet-based img2img pipeline that converts BIM renders into synthetic site photographs.
+ComfyUI drives the depth-ControlNet pipeline that turns BIM geometry into synthetic site photographs.
 
 **Clone and set up ComfyUI**
 
@@ -288,26 +310,42 @@ pip install -r requirements.txt
 
 **Download required model weights**
 
-Place the following files in the indicated ComfyUI sub-directories:
+The VLM branch conditions a **depth** ControlNet with a depth map rasterised
+from the IFC mesh (see [Depth-conditioned site-photo synthesis](#depth-conditioned-site-photo-synthesis)),
+so a depth ControlNet is required — a Canny or MLSD model conditions on a
+signal this pipeline does not produce.
 
-| File                            | Destination                     |
-| ------------------------------- | ------------------------------- |
-| `v1-5-pruned-emaonly.ckpt`    | `ComfyUI/models/checkpoints/` |
-| `control_v11p_sd15_canny.pth` | `ComfyUI/models/controlnet/`  |
-
-Download links:
-
-- SD 1.5 base: [huggingface.co/runwayml/stable-diffusion-v1-5](https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5)
-- ControlNet Canny: [huggingface.co/lllyasviel/ControlNet-v1-1](https://huggingface.co/lllyasviel/ControlNet-v1-1)
-
-**Install the ControlNet preprocessor node**
+| File                                            | Destination                     | Size   |
+| ----------------------------------------------- | ------------------------------- | ------ |
+| `Realistic_Vision_V6.0_NV_B1_fp16.safetensors` | `ComfyUI/models/checkpoints/` | 2.1 GB |
+| `control_v11f1p_sd15_depth.pth`                | `ComfyUI/models/controlnet/`  | 1.4 GB |
 
 ```bash
-cd ComfyUI/custom_nodes
-git clone https://github.com/Fannovel16/comfyui_controlnet_aux.git
-cd comfyui_controlnet_aux
-pip install -r requirements.txt
+# Photoreal SD 1.5 checkpoint — base SD 1.5 renders architecture flatly and
+# does not produce a convincing photograph
+cd ComfyUI/models/checkpoints
+curl -LO https://huggingface.co/SG161222/Realistic_Vision_V6.0_B1_noVAE/resolve/main/Realistic_Vision_V6.0_NV_B1_fp16.safetensors
+
+# Depth ControlNet
+cd ../controlnet
+curl -LO https://huggingface.co/lllyasviel/ControlNet-v1-1/resolve/main/control_v11f1p_sd15_depth.pth
 ```
+
+Model pages:
+
+| Model                                   | Role                            | Link                                                                                                                  |
+| --------------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Realistic Vision V6.0 B1                | SD 1.5 photoreal checkpoint     | [SG161222/Realistic_Vision_V6.0_B1_noVAE](https://huggingface.co/SG161222/Realistic_Vision_V6.0_B1_noVAE)                 |
+| ControlNet v1.1 depth                   | Holds the BIM form              | [lllyasviel/ControlNet-v1-1](https://huggingface.co/lllyasviel/ControlNet-v1-1)                                           |
+| Stable Diffusion 1.5 (base, *optional*) | Fallback checkpoint             | [stable-diffusion-v1-5](https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5)                               |
+
+Names are resolved at run time: if the checkpoint or ControlNet named in
+`config.json` is absent, the engine auto-selects an installed model whose
+name matches `vlm_control_hint` and logs a warning.
+
+> No custom ComfyUI nodes are required. The workflow uses only core nodes
+> (`ControlNetApplyAdvanced`, `EmptyLatentImage`, `KSampler`), because the
+> depth hint is rasterised in this project rather than by a preprocessor node.
 
 **Start ComfyUI in headless API mode**
 
@@ -621,12 +659,12 @@ Key parameters:
 
 | Parameter                   | Default                        | Description                                                       |
 | --------------------------- | ------------------------------ | ----------------------------------------------------------------- |
-| `dataset_mode`            | `sft`                        | `"sft"`, `"dapt"`, or `"both"` (selected by `--dataset`)    |
-| `llm_backend`             | `gemini`                     | `"ollama"`, `"llamaserver"`, `"gemini"`, or `"none"`       |
+| `dataset_mode`            | `both`                       | `"sft"`, `"dapt"`, or `"both"` (selected by `--dataset`)    |
+| `llm_backend`             | `ollama`                     | `"ollama"`, `"llamaserver"`, `"gemini"`, or `"none"`       |
 | `gemini_model`            | `gemini-2.5-flash`           | Gemini model name (used when `llm_backend="gemini"`)            |
 | `llm_parallel`            | `1`                          | Concurrent worker threads (match`--parallel N` of llama-server) |
 | `qa_per_chunk`            | `3`                          | QA pairs generated per chunk in a single LLM call                 |
-| `ollama_model`            | `mistral:7b-instruct-q4_K_M` | Ollama model tag                                                  |
+| `ollama_model`            | `qwen3:30b-a3b`              | Ollama model tag                                                  |
 | `llama_server_url`        | `http://localhost:8080`      | llama-server base URL                                             |
 | `ollama_temperature`      | `0.1`                        | Lower = more deterministic output                                 |
 | `chunk_min_size`          | `500`                        | Minimum characters per text chunk                                 |
@@ -638,9 +676,137 @@ Key parameters:
 | `ifc_render_width/height` | `1024`                       | Render resolution                                                 |
 | `ifc_max_elements`        | `500`                        | Element count cap for rendering performance                       |
 | `comfyui_url`             | `http://127.0.0.1:8188`      | ComfyUI headless API endpoint                                     |
-| `i2i_denoise`             | `0.70`                       | img2img denoising strength                                        |
-| `i2i_steps`               | `20`                         | Diffusion sampling steps                                          |
-| `controlnet_strength`     | `0.80`                       | ControlNet conditioning strength                                  |
+
+### Ollama generation limits
+
+Set explicitly so behaviour does not depend on a hand-written Modelfile.
+
+| Parameter              | Default | Description                                                                                                                            |
+| ---------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `ollama_num_ctx`     | `16384` | Context window. Ollama otherwise opens the model at its full trained context (262 144 for qwen3), reserving tens of GB of KV cache.     |
+| `ollama_num_predict` | `8192`  | Output cap. The multi-QA prompt's nested schema runs to ~5 000 tokens; a lower cap truncates mid-JSON and the reply cannot be parsed.   |
+| `ollama_json_mode`   | `false` | Grammar-enforced JSON. **Leave off for reasoning models** — on qwen3 the grammar binds the answer channel while tokens go to the thinking channel, and the reply comes back empty. Enable only for a model you have verified. |
+
+### DAPT corpus
+
+| Parameter                | Default | Description                                                                                                    |
+| ------------------------ | ------- | -------------------------------------------------------------------------------------------------------------- |
+| `dapt_infer_metadata`  | `true`  | One Ollama call per document fills `source_type`, `source_org`, `source_date`, `project_type`, `domain_tags`, `license`. Fields are left empty on failure rather than guessed. |
+| `dapt_dedupe`          | `true`  | Drop repeated chunks by `raw_hash` (repeated notices, running headers)                                        |
+
+### IFC rendering
+
+| Parameter                       | Default                                        | Description                                                                                     |
+| ------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `ifc_view_angles`             | `{"perspective":[18,-55], "top":[90,-90], …}` | `(elev, azim)` per view. The perspective sits low; a steep bird's-eye angle does not read as a site photograph. |
+| `ifc_min_elements_per_group`  | `5`                                            | Space groups below this are skipped — a lone wall on empty ground makes a weak training pair. The whole-model group is always kept. |
+
+### VLM image synthesis
+
+| Parameter                     | Default                     | Description                                                                                                              |
+| ----------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `sd_base_model`             | `Realistic_Vision_V6.0_NV_B1_fp16.safetensors` | ComfyUI checkpoint                                                                            |
+| `controlnet_model`          | `control_v11f1p_sd15_depth.pth` | ComfyUI ControlNet                                                                                         |
+| `vlm_control_hint`          | `depth`                   | `"depth"` feeds the rasterised depth map; `"render"` feeds the colour BIM render (legacy, leaks the wireframe look) |
+| `vlm_photo_views`           | `["perspective"]`         | Views that get a synthesised photo. An orthographic plan has no photographic equivalent — the sampler stands the slab up and paints it as a facade, which reads as a 90° rotation. |
+| `vlm_init_from_render`      | `false`                   | `false` starts from an empty latent. `true` restores img2img from the BIM render (needs `i2i_denoise` < 1) |
+| `vlm_depth_ground_plane`    | `true`                    | Fill empty depth pixels with an infinite ground plane, giving the hint a horizon and a receding floor       |
+| `vlm_ground_roughness`      | `0.10`                    | Undulation added to that ground, as a fraction of the model's depth range. `0` gives a flat plane, which renders as a paved slab |
+| `vlm_control_resolution`    | `512`                     | Depth-map raster size fed to ControlNet                                                                     |
+| `vlm_image_width/height`    | `768`                     | Generated image resolution                                                                                  |
+| `vlm_sampler` / `vlm_scheduler` | `dpmpp_2m` / `karras` | KSampler settings                                                                                           |
+| `vlm_seed`                  | `-1`                      | `-1` derives a stable per-image seed from the file name (reruns reproduce, sibling views differ)           |
+| `i2i_denoise`               | `1.0`                     | Denoising strength; `1.0` means the render contributes nothing to the latent                              |
+| `i2i_steps` / `i2i_cfg`     | `30` / `7.0`              | Diffusion steps and guidance scale                                                                          |
+| `controlnet_strength`       | `0.80`                    | ControlNet conditioning strength                                                                            |
+| `controlnet_start_percent` / `controlnet_end_percent` | `0.0` / `0.75` | Sampling window over which the hint applies. Holding it to 100 % keeps surfaces looking like shaded geometry |
+| `vlm_positive_prompt`       | see `config.json`         | Supports `{project_type}`, `{trade_type}`, `{view_type}` substitution                                 |
+| `vlm_negative_prompt`       | see `config.json`         | Suppresses the CAD look, demolition drift, wire-mesh wallpaper, desert drift, and paved ground             |
+| `vlm_trade_prompts`         | `{}`                      | Optional per-`trade_type` fragment appended to the positive prompt                                        |
+
+---
+
+## Depth-conditioned site-photo synthesis
+
+The VLM branch turns a BIM render into a photograph of the same structure. Two
+properties have to hold at once: the output must look photographic, and its
+geometry must still match the BIM model it is paired with.
+
+**The BIM form is carried by ControlNet, not by img2img.** Starting the sampler
+from the BIM render at `denoise` < 1 leaves part of that render's flat shading
+in the final latent, and the output comes back as a recoloured wireframe. The
+form is instead held by a depth hint while the latent starts empty, so the
+prompt decides every surface.
+
+**The depth hint is a real z-buffer, rasterised from the IFC mesh** (`src/ifc_processor.py`).
+Feeding the colour render to a depth ControlNet instead makes it read the drawn
+*lines* as geometry. The same rasteriser pass produces the colour BIM render,
+so the two images describe exactly the same visible surfaces — every face
+enclosed by edges in the render is a solid surface in the photograph.
+
+**Empty pixels are filled with an infinite ground plane** at the model base,
+which gives the hint a horizon and a receding floor. A finite ground quad
+cannot do this under an orthographic camera: its edges stay visible, so it
+reads as a plinth and the building becomes a scale model on a table. That
+ground is then undulated slightly (`vlm_ground_roughness`), because a
+mathematically flat plane is rendered as a cast concrete slab however hard the
+negative prompt argues otherwise.
+
+```
+IFC mesh ─┬─► z-buffer ─► colour render ──────────────► images/bim_render/
+          │      │
+          │      └─► depth + ground fill ─────────────► images/depth/
+          │                    │
+          └────────────────────┴─► ControlNet ─► SD ──► images/site_photo/
+                                   (empty latent, denoise 1.0)
+```
+
+---
+
+## Revision History
+
+### v0.3 — VLM realism, corpus quality
+
+**VLM image synthesis rewritten.** Site photos were previously recoloured
+wireframes rather than photographs.
+
+- Structure moved from img2img to a depth ControlNet; generation starts from an
+  empty latent (`vlm_init_from_render`, `i2i_denoise` 0.70 → 1.0)
+- Added a z-buffer depth rasteriser with an analytic infinite ground plane and
+  ground roughness (`vlm_depth_ground_plane`, `vlm_ground_roughness`)
+- BIM render moved off matplotlib onto the same rasteriser — its alpha-blended
+  polygons showed back faces, so the render's silhouette disagreed with the
+  depth hint. Silhouettes are now pixel-identical.
+- Photo synthesis restricted to perspective views (`vlm_photo_views`);
+  orthographic plans were being re-read as facades, which looked like a 90°
+  rotation
+- Checkpoint switched to Realistic Vision V6.0 B1; ControlNet switched to depth
+- Switched to `ControlNetApplyAdvanced` with `controlnet_end_percent`
+- Prompts moved into `config.json` with `{project_type}`/`{trade_type}`/
+  `{view_type}` substitution
+- Camera lowered to `elev 18` and exposed as `ifc_view_angles`
+- Sparse space groups skipped (`ifc_min_elements_per_group`)
+- Fixed: ComfyUI PNG output was being written with a `.jpg` extension
+
+**Corpus quality.**
+
+- PDF text normalisation: vertically-set text (`국\n토\n교\n통\n부`) folded back
+  into one line, TOC dot-leaders and page furniture removed, non-informative
+  chunks dropped
+- DAPT document metadata inferred once per document; `section_path` tracked
+  across chunks; duplicates dropped by `raw_hash`
+- Ollama `num_ctx` / `num_predict` set explicitly — the defaults opened the
+  model at its full 262 144-token context and truncated replies mid-JSON
+
+### v0.2 — Multi-backend sLLM
+
+- llama-server and Gemini backends, parallel workers, multi-QA per chunk
+- DAPT dataset mode; per-input-file output folders
+- `config.json` defaults with CLI override and `--save-config`
+
+### v0.1 — Initial release
+
+- PyMuPDF chunking, Ollama SFT synthesis, IfcOpenShell parsing, ComfyUI VLM branch
 
 ---
 

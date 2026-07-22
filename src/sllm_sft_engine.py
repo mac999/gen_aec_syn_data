@@ -186,19 +186,35 @@ class SLLM_SFT_Engine:
                 "Initialising Ollama: %s @ %s",
                 self.config.ollama_model, self.config.ollama_base_url,
             )
+            # Generation limits are set here rather than left to the model's
+            # defaults. Ollama otherwise opens the model at its full trained
+            # context (262 144 for qwen3), reserving tens of GB of KV cache,
+            # and caps output at a length this prompt's nested schema exceeds —
+            # a truncated reply is unparseable JSON.
+            opts = {
+                "num_ctx": self.config.ollama_num_ctx,
+                "num_predict": self.config.ollama_num_predict,
+            }
+            # Grammar-enforced JSON, matching what the llamaserver and gemini
+            # backends already ask for.
+            if self.config.ollama_json_mode:
+                opts["format"] = "json"
+
             try:
                 from langchain_ollama import OllamaLLM as _Ollama  # noqa: PLC0415
                 llm = _Ollama(
                     model=self.config.ollama_model,
                     base_url=self.config.ollama_base_url,
                     temperature=self.config.ollama_temperature,
+                    **opts,
                 )
-            except ImportError:
+            except (ImportError, TypeError):
                 from langchain_community.llms import Ollama as _Ollama  # noqa: PLC0415
                 llm = _Ollama(
                     model=self.config.ollama_model,
                     base_url=self.config.ollama_base_url,
                     temperature=self.config.ollama_temperature,
+                    **opts,
                 )
             from langchain_core.prompts import PromptTemplate  # noqa: PLC0415
             prompt = PromptTemplate(
