@@ -659,6 +659,7 @@ class VLMEngine:
                 image_paths=abs_paths,
                 instruction=instruction,
                 bim_context=bim_context,
+                labels=task.get("labels"),
             )
 
             self._sample_counter += 1
@@ -677,12 +678,16 @@ class VLMEngine:
             ))
         return samples
 
+    # Verdict vocabulary used when a task does not declare its own.
+    _DEFAULT_LABELS = ["match", "partial_match", "mismatch", "unknown"]
+
     def _make_output(
-        self, task_type: str, image_paths: List[Path], instruction: str, bim_context: str
+        self, task_type: str, image_paths: List[Path], instruction: str,
+        bim_context: str, labels: Optional[List[str]] = None,
     ) -> VLMOutput:
         """Produce output via the configured backend ('vlm' or 'template')."""
         if self.config.vlm_output_backend == "vlm":
-            out = self._generate_output_via_vlm(image_paths, instruction, bim_context)
+            out = self._generate_output_via_vlm(image_paths, instruction, bim_context, labels)
             if out is not None:
                 return out
             logger.warning("VLM output generation failed for %s — using empty fallback", task_type)
@@ -691,12 +696,14 @@ class VLMEngine:
         return VLMOutput(answer="", label="unknown", evidence=[])
 
     def _generate_output_via_vlm(
-        self, image_paths: List[Path], instruction: str, bim_context: str
+        self, image_paths: List[Path], instruction: str, bim_context: str,
+        labels: Optional[List[str]] = None,
     ) -> Optional[VLMOutput]:
         """
         Call the Ollama vision model on *image_paths* and parse a grounded
         {answer, label, evidence}. Returns None on any failure so the caller can
-        fall back. No ruleset — the model decides the label.
+        fall back. No ruleset — the model decides the label from *labels* (the
+        task's allowed verdict vocabulary).
         """
         try:
             images_b64 = [
@@ -706,13 +713,14 @@ class VLMEngine:
             logger.warning("Could not read image for VLM call: %s", exc)
             return None
 
+        label_opts = "|".join(labels or self._DEFAULT_LABELS)
         prompt = (
             f"{instruction}\n\n"
             "참고용 BIM 요소 속성(정답 판단의 근거로 활용):\n"
             f"{bim_context or '(제공된 속성 없음)'}\n\n"
             "아래 JSON 형식으로만 응답하라 (마크다운/추가 텍스트 없이):\n"
             '{"answer": "<한국어 설명>", '
-            '"label": "<match|partial_match|mismatch|unknown>", '
+            f'"label": "<{label_opts}>", '
             '"evidence": ["<근거1>", "<근거2>"]}'
         )
         url = f"{self.config.ollama_base_url.rstrip('/')}/api/chat"

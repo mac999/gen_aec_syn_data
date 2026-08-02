@@ -837,18 +837,50 @@ unchanged; tasks differ only by `task_type`, `images`, `instruction`, `output`.
 | `vlm_output_timeout`       | `180`                          | Seconds per VLM call                                                                             |
 | `vlm_context_max_elements` | `10`                           | How many BIM elements are passed to the VLM as grounding text (not stored in the sample)         |
 | `vlm_write_bim_catalog`    | `true`                         | Write per-IFC `bim_elements.json` (audit/verification asset keyed by `GlobalId`)                 |
-| `vlm_tasks`                | `[site_description, bim_site_comparison]` | Per-task specs: `{task_type, images:["bim"/"site"], instruction}`                    |
+| `vlm_tasks`                | 5 tasks (below)                | Per-task specs: `{task_type, images, instruction, labels}`                                       |
+
+**Built-in tasks** (edit/extend freely in `config.json`):
+
+| `task_type`             | images        | what it asks                                | `labels` (allowed `output.label`)             |
+| ----------------------- | ------------- | ------------------------------------------- | --------------------------------------------- |
+| `site_description`      | site          | describe visible structure & work stage     | `clear` / `partial` / `unclear`               |
+| `element_detection`     | site          | list & identify structural elements         | `detected` / `partial` / `none`               |
+| `material_identification` | site        | identify material & construction method     | `철근콘크리트` / `철골` / `복합구조` / `기타`   |
+| `progress_assessment`   | site          | assess construction stage & completeness    | `foundation` / `structure` / `finishing` / `completed` |
+| `bim_site_comparison`   | bim + site    | compare design vs site, note mismatches     | `match` / `partial_match` / `mismatch` / `unknown` |
+
+Each task's `labels` are injected into the VLM prompt so the verdict fits the
+task; omit `labels` to fall back to the match/mismatch set.
 
 ```jsonc
 // config.json — add or edit tasks freely
 "vlm_output_backend": "vlm",
 "vlm_ollama_model": "qwen2.5vl:7b",
 "vlm_tasks": [
-  { "task_type": "site_description",   "images": ["site"],
-    "instruction": "이 건설 현장 사진을 보고 …" },
+  { "task_type": "material_identification", "images": ["site"],
+    "instruction": "현장 사진에 나타난 주요 구조 재료와 공법을 식별하라 …",
+    "labels": ["철근콘크리트", "철골", "복합구조", "기타"] },
   { "task_type": "bim_site_comparison", "images": ["bim", "site"],
-    "instruction": "BIM 렌더링과 현장 사진을 비교하여 …" }
+    "instruction": "BIM 렌더링과 현장 사진을 비교하여 …",
+    "labels": ["match", "partial_match", "mismatch", "unknown"] }
 ]
+```
+
+A generated `material_identification` sample (schema unchanged; only content varies):
+
+```json
+{
+  "id": "vlm_000003",
+  "task_type": "material_identification",
+  "images": ["images/site_photo/Duplex_A_1_perspective_site.png"],
+  "metadata": { "project_type": "건물", "bim_element_ids": ["1a2b","4d5e"], "trade_type": "철근콘크리트", "view_type": "3d_perspective" },
+  "instruction": "현장 사진에 나타난 주요 구조 재료와 공법을 식별하라 …",
+  "output": {
+    "answer": "현장 사진에 나타난 주요 구조 재료는 철근콘크리트입니다.",
+    "label": "철근콘크리트",
+    "evidence": ["구조물은 콘크리트로 만들어져 있으며, 철근이 보입니다."]
+  }
+}
 ```
 
 > Install the vision model once: `ollama pull qwen2.5vl:7b`. The synthesised site
@@ -913,9 +945,11 @@ IFC mesh ─┬─► z-buffer ─► colour render ─────────�
 **VLM — task-driven datasets with VLM-in-the-loop output**
 
 - `vlm_tasks` (config) defines multiple fine-tuning tasks; each emits one sample
-  per render with its own image set (`site` only, or `bim`+`site`) and
-  instruction — e.g. `site_description` (1 image) and `bim_site_comparison`
-  (2 images). The `VLMSample` schema is **unchanged**.
+  per render with its own image set (`site` only, or `bim`+`site`), instruction,
+  and `labels` (allowed `output.label`, injected into the prompt). Five built-in
+  tasks: `site_description`, `element_detection`, `material_identification`,
+  `progress_assessment`, `bim_site_comparison`. The `VLMSample` schema is
+  **unchanged**.
 - `vlm_output_backend:"vlm"` generates each sample's `output`
   (answer/label/evidence) by calling an Ollama vision model
   (`vlm_ollama_model`, default `qwen2.5vl:7b`) on the sample's own images —

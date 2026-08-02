@@ -89,7 +89,50 @@
       "images": [
         "site"
       ],
-      "instruction": "이 건설 현장 사진을 보고 보이는 구조 요소와 공정(시공) 상태를 구체적으로 설명하라."
+      "instruction": "이 건설 현장 사진을 보고 보이는 구조 요소와 공정(시공) 상태를 구체적으로 설명하라.",
+      "labels": [
+        "clear",
+        "partial",
+        "unclear"
+      ]
+    },
+    {
+      "task_type": "element_detection",
+      "images": [
+        "site"
+      ],
+      "instruction": "현장 사진에서 보이는 구조 요소(보, 기둥, 슬래브, 벽, 계단 등)를 찾아 종류별로 나열하고 각 식별 근거를 제시하라.",
+      "labels": [
+        "detected",
+        "partial",
+        "none"
+      ]
+    },
+    {
+      "task_type": "material_identification",
+      "images": [
+        "site"
+      ],
+      "instruction": "현장 사진에 나타난 주요 구조 재료와 공법을 식별하라 (예: 철근콘크리트, 철골, 복합구조).",
+      "labels": [
+        "철근콘크리트",
+        "철골",
+        "복합구조",
+        "기타"
+      ]
+    },
+    {
+      "task_type": "progress_assessment",
+      "images": [
+        "site"
+      ],
+      "instruction": "이 현장의 시공 진행 단계(기초/골조/마감 등)와 대략적인 완료도를 근거와 함께 평가하라.",
+      "labels": [
+        "foundation",
+        "structure",
+        "finishing",
+        "completed"
+      ]
     },
     {
       "task_type": "bim_site_comparison",
@@ -97,7 +140,13 @@
         "bim",
         "site"
       ],
-      "instruction": "첫 번째 BIM 렌더링과 두 번째 현장 사진을 비교하여, 설계 대비 현장의 일치/불일치 요소를 근거와 함께 구체적으로 설명하라."
+      "instruction": "첫 번째 BIM 렌더링과 두 번째 현장 사진을 비교하여, 설계 대비 현장의 일치/불일치 요소를 근거와 함께 구체적으로 설명하라.",
+      "labels": [
+        "match",
+        "partial_match",
+        "mismatch",
+        "unknown"
+      ]
     }
   ],
   "max_samples_per_doc": 50,
