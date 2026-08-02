@@ -376,6 +376,8 @@ curl http://127.0.0.1:8188/system_stats
 
 ## Installation
 
+### Option A — Run from source
+
 ```bash
 # 1. Clone the repository
 git clone <repo-url>
@@ -394,6 +396,53 @@ pip install -r requirements.txt
 
 # 4. (Optional) Configure secrets for the Gemini backend
 cp .env.example .env      # then edit .env and set GEMINI_API_KEY
+```
+
+Run it with `python main.py …` (see [Usage](#usage)).
+
+### Option B — Install as a package (library + `aec-pipeline` CLI)
+
+The project ships a `pyproject.toml`, so it can be installed with `pip` and used
+as an importable library or via a console command. Dependencies from
+`requirements.txt` are resolved automatically.
+
+```bash
+cd gen_aec_syn_data
+
+# Regular install
+pip install .
+
+# …or an editable/develop install (code changes take effect without reinstalling)
+pip install -e .
+```
+
+This exposes:
+
+- a console command **`aec-pipeline`** — same interface as `python main.py`:
+  ```bash
+  aec-pipeline --help
+  aec-pipeline --pdf input/regulation.pdf --ifc input/office_tower.ifc
+  ```
+- an importable package **`gen_aec_syn_data`** for use from your own code:
+  ```python
+  from gen_aec_syn_data import AECPipeline, PipelineConfig
+
+  cfg = PipelineConfig.load_default()      # falls back to built-in defaults
+  cfg.input_dir = "input"
+  cfg.output_dir = "output"
+  AECPipeline(cfg).run()
+  ```
+
+> When installed, `PipelineConfig.load_default()` looks for a `config.json` in the
+> **current working directory** first, so run `aec-pipeline` from a folder that
+> holds your `config.json`, or pass `--config /path/to/config.json`.
+
+**Build a distributable wheel** (optional, e.g. to publish or install elsewhere):
+
+```bash
+pip install build
+python -m build            # writes dist/gen_aec_syn_data-<version>-py3-none-any.whl
+pip install dist/gen_aec_syn_data-*.whl
 ```
 
 > Default settings live in `config.json` and are loaded automatically on every run.
