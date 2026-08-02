@@ -24,8 +24,43 @@ import os
 
 import requests
 
-from .config import PipelineConfig
+import string
+
+from .config import (
+    DEFAULT_SFT_NEGATIVE_PROMPT_TEMPLATE,
+    DEFAULT_SFT_PROMPT_TEMPLATE,
+    SFT_TEMPLATE_PLACEHOLDERS,
+    PipelineConfig,
+)
 from .schemas import DocumentChunk, EvidenceBlock, SFTInput, SFTInputMetadata, SFTOutput, SFTSample
+
+
+def _validate_sft_template(name: str, template: str) -> str:
+    """
+    Return *template* if it carries the required placeholders, else raise.
+
+    Guards against a user editing the prompt in config.json and dropping a
+    ``{text}``/``{doc_id}`` field or mis-escaping a literal JSON brace — which
+    would otherwise surface only mid-run as an opaque ``KeyError`` from
+    ``str.format``. ``string.Formatter().parse`` reads doubled ``{{ }}`` as
+    literal text, so real placeholders are detected without false positives.
+    """
+    try:
+        found = {fname for _, fname, _, _ in string.Formatter().parse(template) if fname}
+    except ValueError as exc:  # unbalanced single braces
+        raise ValueError(
+            f"SFT template '{name}' has malformed braces "
+            f"(escape literal JSON braces as {{{{ and }}}}): {exc}"
+        ) from exc
+    missing = set(SFT_TEMPLATE_PLACEHOLDERS) - found
+    if missing:
+        need = ", ".join("{" + p + "}" for p in SFT_TEMPLATE_PLACEHOLDERS)
+        got = ", ".join("{" + m + "}" for m in sorted(missing))
+        raise ValueError(
+            f"SFT template '{name}' is missing required placeholder(s): {got}. "
+            f"Every template must contain: {need}."
+        )
+    return template
 
 logger = logging.getLogger("AEC_Pipeline.sllm_engine")
 
@@ -110,53 +145,6 @@ def _extract_json_object(raw: str) -> Optional[Dict]:
     return None
 
 
-# ── Prompt template (multi-QA, both backends) ─────────────────────────────
-# Uses {{/}} for literal JSON braces; {var} for substitution variables.
-
-_MULTI_QA_PROMPT = """\
-당신은 AEC(건축·엔지니어링·건설) 분야 전문 데이터 합성기입니다.
-아래 문서 청크를 읽고, 건설 법규 LLM 파인튜닝에 적합한 고품질 질문-답변 쌍을 {n}개 생성하세요.
-
-규칙:
-- 각 질문은 반드시 주어진 청크의 내용만으로 답할 수 있어야 합니다.
-- 각 답변은 특정 조항, 표, 또는 수치를 반드시 인용해야 합니다.
-- 질문과 답변은 반드시 한국어로 작성하세요.
-- 서로 다른 관점의 질문을 생성하세요 (예: 정의, 절차, 기준, 처벌 등).
-- domain_tags는 관련 AEC 도메인 태그 2~4개로 구성하세요 (예: 구조, 안전, 설비, 기계, 전기, 건축, 토목, 소방 등).
-- final_label은 내용에 맞게 "compliant", "non_compliant", "answerable", "unanswerable" 중 하나로 설정하세요.
-- 유효한 JSON만 응답하세요 — 마크다운 코드 펜스나 추가 텍스트 없이.
-
-JSON 스키마:
-{{
-  "qa_pairs": [
-    {{
-      "instruction": "<구체적인 한국어 질문>",
-      "input": {{
-        "context": "<관련 문서 chunk 또는 조항 전문>",
-        "metadata": {{"project_type": "<건축|교량|터널|도로|댐 등>", "language": "ko"}}
-      }},
-      "output": {{
-        "answer": "<정확하고 근거 있는 한국어 답변>",
-        "evidence": [
-          {{
-            "doc_id": "{doc_id}",
-            "section": "<조항 또는 절 참조, 예: '제3조 2항'>"
-          }}
-        ],
-        "final_label": "<compliant|non_compliant|answerable|unanswerable>"
-      }},
-      "domain_tags": ["<태그1>", "<태그2>"],
-      "source_doc_ids": ["{doc_id}"]
-    }}
-  ]
-}}
-
-문서 청크 (doc_id={doc_id}, chunk={chunk_index}):
----
-{text}
----
-
-JSON 응답:"""
 
 
 class SLLM_SFT_Engine:
@@ -174,14 +162,62 @@ class SLLM_SFT_Engine:
 
     def __init__(self, config: PipelineConfig) -> None:
         self.config = config
-        self._chain: Optional[Any] = None      # Ollama LangChain chain
-        self._chain_lock = threading.Lock()    # guard lazy init
+        self._llm: Optional[Any] = None        # lazily-built Ollama LLM
+        self._llm_lock = threading.Lock()      # guard lazy init
         self._counter_lock = threading.Lock()  # guard sample counter + file
         self._sample_counter = 0
+
+        # Resolve and validate the prompt templates once, up front — a bad
+        # placeholder in a user-edited config.json should fail loudly here, not
+        # silently produce empty output thousands of chunks into a run. Empty
+        # config values fall back to the built-in defaults.
+        self._pos_template = _validate_sft_template(
+            "sft_prompt_template",
+            config.sft_prompt_template or DEFAULT_SFT_PROMPT_TEMPLATE,
+        )
+        self._neg_template = _validate_sft_template(
+            "sft_negative_prompt_template",
+            config.sft_negative_prompt_template or DEFAULT_SFT_NEGATIVE_PROMPT_TEMPLATE,
+        )
 
         # Output path is set per input file via set_output_dir(); default here
         # keeps the engine usable standalone.
         self.jsonl_path = self.config.sft_output_dir / "sllm_training_data.jsonl"
+
+    # ── Prompt rendering ────────────────────────────────────────────────────
+
+    def _is_negative_chunk(self, chunk: DocumentChunk) -> bool:
+        """
+        Decide deterministically whether *chunk* yields negative samples.
+
+        A Bresenham-style test spreads ``sft_negative_ratio`` evenly across
+        chunk indices (e.g. 0.25 → every 4th chunk) without any RNG, so a run
+        is reproducible and a config of 0.0 never produces negatives.
+        """
+        ratio = self.config.sft_negative_ratio
+        if ratio <= 0:
+            return False
+        if ratio >= 1:
+            return True
+        i = chunk.chunk_index
+        return int((i + 1) * ratio) > int(i * ratio)
+
+    def _render_prompt(self, chunk: DocumentChunk, negative: bool) -> str:
+        """Fill the positive or negative template for *chunk*."""
+        template = self._neg_template if negative else self._pos_template
+        try:
+            return template.format(
+                doc_id=chunk.doc_id,
+                chunk_index=chunk.chunk_index,
+                n=self.config.qa_per_chunk,
+                text=chunk.text[: self.config.chunk_max_size],
+            )
+        except (KeyError, IndexError, ValueError) as exc:
+            kind = "negative" if negative else "positive"
+            raise ValueError(
+                f"Failed to render SFT {kind} prompt — check the template's "
+                f"placeholders and that literal JSON braces are doubled: {exc}"
+            ) from exc
 
     def set_output_dir(self, out_dir: Path) -> None:
         """Point this engine's JSONL output at *out_dir* (created if missing)."""
@@ -222,16 +258,18 @@ class SLLM_SFT_Engine:
     # ── Retry wrapper ───────────────────────────────────────────────────────
 
     def _synthesise_with_retry(self, chunk: DocumentChunk) -> List[SFTSample]:
+        negative = self._is_negative_chunk(chunk)
+        prompt_text = self._render_prompt(chunk, negative)
         last_error: Optional[Exception] = None
         for attempt in range(1, self.config.llm_max_retries + 1):
             try:
                 if self.config.llm_backend == "llamaserver":
-                    raw = self._call_llamaserver(chunk)
+                    raw = self._call_llamaserver(prompt_text)
                 elif self.config.llm_backend == "gemini":
-                    raw = self._call_gemini(chunk)
+                    raw = self._call_gemini(prompt_text)
                 else:
-                    raw = self._call_ollama(chunk)
-                samples = self._parse_multi_output(raw, chunk)
+                    raw = self._call_ollama(prompt_text)
+                samples = self._parse_multi_output(raw, chunk, negative)
                 if samples:
                     return samples
             except Exception as exc:
@@ -250,18 +288,13 @@ class SLLM_SFT_Engine:
 
     # ── Ollama backend ──────────────────────────────────────────────────────
 
-    def _call_ollama(self, chunk: DocumentChunk) -> str:
-        self._ensure_ollama_chain()
-        return self._chain.invoke({
-            "doc_id": chunk.doc_id,
-            "chunk_index": chunk.chunk_index,
-            "n": self.config.qa_per_chunk,
-            "text": chunk.text[: self.config.chunk_max_size],
-        })
+    def _call_ollama(self, prompt_text: str) -> str:
+        self._ensure_ollama_llm()
+        return self._llm.invoke(prompt_text)
 
-    def _ensure_ollama_chain(self) -> None:
-        with self._chain_lock:
-            if self._chain is not None:
+    def _ensure_ollama_llm(self) -> None:
+        with self._llm_lock:
+            if self._llm is not None:
                 return
             logger.info(
                 "Initialising Ollama: %s @ %s",
@@ -297,17 +330,14 @@ class SLLM_SFT_Engine:
                     temperature=self.config.ollama_temperature,
                     **opts,
                 )
-            from langchain_core.prompts import PromptTemplate  # noqa: PLC0415
-            prompt = PromptTemplate(
-                template=_MULTI_QA_PROMPT,
-                input_variables=["doc_id", "chunk_index", "n", "text"],
-            )
-            self._chain = prompt | llm
-            logger.info("Ollama chain ready.")
+            # The prompt is rendered per call (positive/negative varies per
+            # chunk), so cache only the LLM and invoke it with the finished text.
+            self._llm = llm
+            logger.info("Ollama LLM ready.")
 
     # ── Gemini backend ──────────────────────────────────────────────────────
 
-    def _call_gemini(self, chunk: DocumentChunk) -> str:
+    def _call_gemini(self, prompt_text: str) -> str:
         """Call Google Gemini API with JSON-enforced output."""
         try:
             from google import genai  # noqa: PLC0415
@@ -326,13 +356,6 @@ class SLLM_SFT_Engine:
                 "Gemini API key not set. Use --gemini-api-key or set GEMINI_API_KEY env var."
             )
 
-        prompt_text = _MULTI_QA_PROMPT.format(
-            doc_id=chunk.doc_id,
-            chunk_index=chunk.chunk_index,
-            n=self.config.qa_per_chunk,
-            text=chunk.text[: self.config.chunk_max_size],
-        )
-
         client = genai.Client(api_key=api_key)
         response = client.models.generate_content(
             model=self.config.gemini_model,
@@ -346,15 +369,9 @@ class SLLM_SFT_Engine:
 
     # ── llama-server backend ────────────────────────────────────────────────
 
-    def _call_llamaserver(self, chunk: DocumentChunk) -> str:
+    def _call_llamaserver(self, prompt_text: str) -> str:
         """POST to llama-server /v1/chat/completions with json_object mode."""
         url = f"{self.config.llama_server_url.rstrip('/')}/v1/chat/completions"
-        prompt_text = _MULTI_QA_PROMPT.format(
-            doc_id=chunk.doc_id,
-            chunk_index=chunk.chunk_index,
-            n=self.config.qa_per_chunk,
-            text=chunk.text[: self.config.chunk_max_size],
-        )
         payload = {
             "model": "local",
             "messages": [{"role": "user", "content": prompt_text}],
@@ -368,7 +385,7 @@ class SLLM_SFT_Engine:
     # ── Output parsing ──────────────────────────────────────────────────────
 
     def _parse_multi_output(
-        self, raw: str, chunk: DocumentChunk
+        self, raw: str, chunk: DocumentChunk, negative: bool = False
     ) -> List[SFTSample]:
         data = _extract_json_object(raw)
 
@@ -393,26 +410,35 @@ class SLLM_SFT_Engine:
 
         samples: List[SFTSample] = []
         for pair in pairs:
-            sample = self._build_sample(pair, chunk)
+            sample = self._build_sample(pair, chunk, negative)
             if sample:
                 samples.append(sample)
         return samples
 
     def _build_sample(
-        self, data: Dict, chunk: DocumentChunk
+        self, data: Dict, chunk: DocumentChunk, negative: bool = False
     ) -> Optional[SFTSample]:
         try:
             inp = data.get("input", {})
             inp_meta = inp.get("metadata", {})
             out = data.get("output", {})
 
-            evidence = [
-                EvidenceBlock(
-                    doc_id=e.get("doc_id", chunk.doc_id),
-                    section=e.get("section", ""),
-                )
-                for e in out.get("evidence", [])
-            ]
+            # Negative samples are unanswerable by construction: stamp the label
+            # and drop any grounding the model may have hallucinated, so the
+            # training signal ("no evidence → decline") stays clean regardless
+            # of how well the model followed the negative template.
+            if negative:
+                evidence: List[EvidenceBlock] = []
+                final_label = "unanswerable"
+            else:
+                evidence = [
+                    EvidenceBlock(
+                        doc_id=e.get("doc_id", chunk.doc_id),
+                        section=e.get("section", ""),
+                    )
+                    for e in out.get("evidence", [])
+                ]
+                final_label = out.get("final_label", "answerable")
 
             sample_id = self._next_id()
             return SFTSample(
@@ -431,7 +457,7 @@ class SLLM_SFT_Engine:
                 output=SFTOutput(
                     answer=out.get("answer", ""),
                     evidence=evidence,
-                    final_label=out.get("final_label", "answerable"),
+                    final_label=final_label,
                 ),
             )
         except Exception as exc:
