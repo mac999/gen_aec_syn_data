@@ -1,7 +1,4 @@
-# Generated / data folders (not related to code execution)
-output/
-input/
-test/
+# Backup folder (not related to code execution)
 bak/
 
 # Python virtual env & caches
