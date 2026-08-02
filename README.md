@@ -10,6 +10,10 @@ The pipeline that ingests AEC source documents and 3D BIM models (IFC) to automa
   <img src="./test/bim_image/Duplex_A_20110907_1_perspective.png" height="260"></img>
   <img src="./test/real_image/Duplex_A_20110907_1_perspective.png" height="260"></img></br>  
   <img src="./doc/img3.png" height="250"></img></br>
+  <img src="./output/Duplex_A_20110907_vlm/images/bim_render/Duplex_A_20110907_1_perspective.png" height="230"></img>
+  <img src="./output/Duplex_A_20110907_vlm/images/depth/Duplex_A_20110907_1_perspective_depth.png" height="230"></img>
+  <img src="./output/Duplex_A_20110907_vlm/images/site_photo/Duplex_A_20110907_1_perspective_site.png" height="230"></img></br>
+  <sub>VLM pipeline: BIM render → depth hint → synthesised site photo</sub>
 </p>
 
 ---
