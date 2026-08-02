@@ -539,6 +539,34 @@ python main.py `
 python main.py --qa-per-chunk 3 --pdf input/regulation.pdf
 ```
 
+### Negative (unanswerable) samples & custom SFT prompts
+
+The SFT prompt is **defined in `config.json`, not in the CLI**, so you can tailor
+generation per project without new flags. Two aspects are configurable:
+
+- **Negative samples** — teach the model to decline when the chunk lacks the
+  evidence, instead of hallucinating an answer. Set `sft_negative_ratio` to the
+  fraction of chunks that should produce *unanswerable* samples (`0.0` = off,
+  the default; `0.2` ≈ one in five). Those samples are written with
+  `final_label: "unanswerable"` and an empty `evidence` list.
+- **Prompt text** — edit `sft_prompt_template` (positive QA) and
+  `sft_negative_prompt_template` (the refusal case) directly in `config.json`.
+
+```jsonc
+// config.json
+{
+  "sft_negative_ratio": 0.2,           // 20% unanswerable negatives; 0.0 disables
+  "sft_prompt_template": "…",          // positive QA template (see below)
+  "sft_negative_prompt_template": "…"  // unanswerable template
+}
+```
+
+Every template **must keep the placeholders** `{n}`, `{doc_id}`,
+`{chunk_index}`, `{text}`, and any literal JSON braces must be **doubled**
+(`{{ … }}`). These are validated at start-up — a missing placeholder or an
+unescaped brace fails immediately with a clear message rather than mid-run.
+Leave a template empty (`""`) to fall back to the built-in default.
+
 ### Tune Ollama for fewer reloads
 
 ```powershell
@@ -739,6 +767,20 @@ Set explicitly so behaviour does not depend on a hand-written Modelfile.
 | `ollama_num_ctx`     | `16384` | Context window. Ollama otherwise opens the model at its full trained context (262 144 for qwen3), reserving tens of GB of KV cache.     |
 | `ollama_num_predict` | `8192`  | Output cap. The multi-QA prompt's nested schema runs to ~5 000 tokens; a lower cap truncates mid-JSON and the reply cannot be parsed.   |
 | `ollama_json_mode`   | `false` | Grammar-enforced JSON. **Leave off for reasoning models** — on qwen3 the grammar binds the answer channel while tokens go to the thinking channel, and the reply comes back empty. Enable only for a model you have verified. |
+
+### SFT prompts & negative samples
+
+Customise QA generation without touching code (see the [usage example](#negative-unanswerable-samples--custom-sft-prompts)).
+
+| Parameter                        | Default        | Description                                                                                                   |
+| -------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------- |
+| `sft_negative_ratio`           | `0.0`          | Fraction (0.0–1.0) of chunks that yield *unanswerable* negative samples. `0.0` disables (prior behaviour). Spread deterministically across chunks. |
+| `sft_prompt_template`          | *(built-in)*   | Positive QA-generation prompt. Must keep `{n} {doc_id} {chunk_index} {text}`; double literal JSON braces. Empty → default. |
+| `sft_negative_prompt_template` | *(built-in)*   | Prompt for the refusal case (forces `final_label:"unanswerable"`, empty `evidence`). Same placeholder rules. |
+
+> Templates are validated at start-up; a missing placeholder or an unescaped
+> brace raises immediately. Unknown keys in `config.json` are ignored with a
+> warning rather than aborting the run.
 
 ### DAPT corpus
 
