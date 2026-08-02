@@ -1,0 +1,10 @@
+# Generated / data folders (not related to code execution)
+output/
+input/
+test/
+bak/
+
+# Python virtual env & caches
+.venv/
+__pycache__/
+*.pyc

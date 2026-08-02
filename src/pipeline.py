@@ -134,8 +134,16 @@ class AECPipeline:
         if mode in ("dapt", "both"):
             try:
                 self.sllm_dapt_engine.set_output_dir(self.config.file_output_dir(stem, "dapt"))
+                doc_meta = {"source_name": pdf_path.name}
+                # A year in the file name (e.g. "…매뉴얼(2024).pdf") is more
+                # reliable than what the model infers from the opening pages,
+                # where the edition year is often not spelled out. doc_meta
+                # takes precedence over inference, so this pins source_date.
+                year = self._year_from_name(pdf_path.stem)
+                if year:
+                    doc_meta["source_date"] = year
                 count += self.sllm_dapt_engine.process_chunks(
-                    chunks, doc_meta={"source_name": pdf_path.name}
+                    chunks, doc_meta=doc_meta
                 )
                 logger.info("[PDF] DAPT → %s", self.sllm_dapt_engine.jsonl_path)
             except Exception as exc:
@@ -197,6 +205,22 @@ class AECPipeline:
         if not directory.exists():
             return []
         return sorted(directory.glob(f"**/*{suffix}"))
+
+    @staticmethod
+    def _year_from_name(stem: str) -> str:
+        """
+        Return a plausible edition year from a file name, or "" if none.
+
+        Prefers a parenthesised year — "매뉴얼(2024)" — over a bare one, then
+        the latest 19xx/20xx found.
+        """
+        import re  # noqa: PLC0415
+
+        paren = re.findall(r"[(\[](19|20)(\d{2})[)\]]", stem)
+        if paren:
+            return max(a + b for a, b in paren)
+        loose = re.findall(r"(?:19|20)\d{2}", stem)
+        return max(loose) if loose else ""
 
     @staticmethod
     def _infer_project_type(stem: str) -> str:
