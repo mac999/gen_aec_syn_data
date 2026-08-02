@@ -25,6 +25,7 @@ records for manual review.
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import time
@@ -36,6 +37,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 from .config import PipelineConfig
 from .schemas import IFCElementInfo, VLMMetadata, VLMOutput, VLMSample
+from .sllm_sft_engine import _extract_json_object  # reuse robust JSON recovery
 
 logger = logging.getLogger("AEC_Pipeline.vlm_engine")
 
@@ -239,6 +241,11 @@ class VLMEngine:
         photo_views = self.config.vlm_photo_views
         skipped: Dict[str, int] = {}
 
+        # Sidecar catalog (audit/verification asset) + grounding text for the VLM.
+        # Both are derived from element metadata only; image synthesis is untouched.
+        self._write_element_catalog(elements, model_id)
+        bim_context = self._elements_to_text(elements)
+
         for index, render_path in enumerate(render_paths):
             view_name = render_path.stem.split("_")[-1]
             depth_path = depths[index] if index < len(depths) else None
@@ -250,6 +257,7 @@ class VLMEngine:
                 skipped[view_name] = skipped.get(view_name, 0) + 1
                 continue
 
+            # UNCHANGED: ComfyUI depth-conditioned site-photo synthesis.
             site_photo_path = self._synthesise_site_photo(
                 render_path,
                 depth_path=depth_path,
@@ -262,16 +270,20 @@ class VLMEngine:
                 logger.warning("Skipping render %s — site photo synthesis failed", render_path.name)
                 continue
 
-            sample = self._build_vlm_sample(
+            view_type = f"3d_{view_name}" if view_name != "top" else "top_view"
+            # One sample per configured task (site-only, bim+site, …). The image
+            # pair is shared; only which images/instruction/output differ.
+            for sample in self._build_task_samples(
                 render_path=render_path,
                 site_photo_path=site_photo_path,
                 elem_ids=elem_ids,
+                bim_context=bim_context,
                 project_type=project_type,
                 trade_type=trade_type,
-                view_type=f"3d_{view_name}" if view_name != "top" else "top_view",
-            )
-            self._append_sample(sample)
-            successful += 1
+                view_type=view_type,
+            ):
+                self._append_sample(sample)
+                successful += 1
 
         if skipped:
             logger.info(
@@ -606,45 +618,172 @@ class VLMEngine:
         logger.info("Fallback site photo saved (copy): %s", out_path.name)
         return out_path
 
-    def _build_vlm_sample(
+    # ── Task-driven sample construction ─────────────────────────────────────
+
+    # Which image goes with each task token, as (relative path, absolute path).
+    def _image_for(self, token: str, render_path: Path, site_photo_path: Path):
+        if token == "bim":
+            return f"images/bim_render/{render_path.name}", render_path
+        if token == "site":
+            return f"images/site_photo/{site_photo_path.name}", site_photo_path
+        raise ValueError(f"Unknown vlm_tasks image token: {token!r} (use 'bim'/'site')")
+
+    def _build_task_samples(
         self,
         render_path: Path,
         site_photo_path: Path,
         elem_ids: List[str],
+        bim_context: str,
         project_type: str,
         trade_type: str,
         view_type: str,
-    ) -> VLMSample:
-        self._sample_counter += 1
-        sample_id = f"vlm_{self._sample_counter:06d}"
+    ) -> List[VLMSample]:
+        """One VLMSample per configured task; schema is unchanged across tasks."""
+        samples: List[VLMSample] = []
+        for task in self.config.vlm_tasks:
+            tokens = task.get("images", ["bim", "site"])
+            try:
+                pairs = [self._image_for(t, render_path, site_photo_path) for t in tokens]
+            except ValueError as exc:
+                logger.warning("Skipping task %s: %s", task.get("task_type"), exc)
+                continue
+            rel_paths = [rel for rel, _ in pairs]
+            abs_paths = [ap for _, ap in pairs]
 
-        return VLMSample(
-            id=sample_id,
-            task_type="bim_site_alignment",
-            images=[f"images/bim_render/{render_path.name}", f"images/site_photo/{site_photo_path.name}"],
-            metadata=VLMMetadata(
-                project_type=project_type,
-                bim_element_ids=elem_ids,
-                trade_type=trade_type,
-                view_type=view_type,
-            ),
-            instruction=(
-                "현장 사진이 BIM 설계 상태와 일치하는지 판단하고 "
-                "불일치 요소와 그 근거를 구체적으로 설명하라."
-            ),
-            output=VLMOutput(
-                answer=(
-                    "BIM 렌더링과 현장 사진의 일치 여부를 분석한 결과, "
-                    "주요 구조 요소는 설계와 일치하나 세부 마감 작업이 "
-                    "미완료 상태로 확인됨."
+            instruction = _fmt_prompt(
+                task.get("instruction", ""),
+                project_type=project_type, trade_type=trade_type, view_type=view_type,
+            )
+            output = self._make_output(
+                task_type=task.get("task_type", "vlm_task"),
+                image_paths=abs_paths,
+                instruction=instruction,
+                bim_context=bim_context,
+            )
+
+            self._sample_counter += 1
+            samples.append(VLMSample(
+                id=f"vlm_{self._sample_counter:06d}",
+                task_type=task.get("task_type", "vlm_task"),
+                images=rel_paths,
+                metadata=VLMMetadata(
+                    project_type=project_type,
+                    bim_element_ids=elem_ids,
+                    trade_type=trade_type,
+                    view_type=view_type,
                 ),
-                label="partial_match",
-                evidence=[
-                    "BIM 모델의 구조 배치와 현장 사진의 구조물 위치가 일치함",
-                    "현장 사진에서 일부 마감재 및 설치물이 설계 대비 미설치 상태로 확인됨",
-                ],
-            ),
+                instruction=instruction,
+                output=output,
+            ))
+        return samples
+
+    def _make_output(
+        self, task_type: str, image_paths: List[Path], instruction: str, bim_context: str
+    ) -> VLMOutput:
+        """Produce output via the configured backend ('vlm' or 'template')."""
+        if self.config.vlm_output_backend == "vlm":
+            out = self._generate_output_via_vlm(image_paths, instruction, bim_context)
+            if out is not None:
+                return out
+            logger.warning("VLM output generation failed for %s — using empty fallback", task_type)
+        # Template / fallback: leave a clearly-empty, honest placeholder rather
+        # than a fabricated answer. label 'unknown' == not asserted.
+        return VLMOutput(answer="", label="unknown", evidence=[])
+
+    def _generate_output_via_vlm(
+        self, image_paths: List[Path], instruction: str, bim_context: str
+    ) -> Optional[VLMOutput]:
+        """
+        Call the Ollama vision model on *image_paths* and parse a grounded
+        {answer, label, evidence}. Returns None on any failure so the caller can
+        fall back. No ruleset — the model decides the label.
+        """
+        try:
+            images_b64 = [
+                base64.b64encode(p.read_bytes()).decode("ascii") for p in image_paths
+            ]
+        except OSError as exc:
+            logger.warning("Could not read image for VLM call: %s", exc)
+            return None
+
+        prompt = (
+            f"{instruction}\n\n"
+            "참고용 BIM 요소 속성(정답 판단의 근거로 활용):\n"
+            f"{bim_context or '(제공된 속성 없음)'}\n\n"
+            "아래 JSON 형식으로만 응답하라 (마크다운/추가 텍스트 없이):\n"
+            '{"answer": "<한국어 설명>", '
+            '"label": "<match|partial_match|mismatch|unknown>", '
+            '"evidence": ["<근거1>", "<근거2>"]}'
         )
+        url = f"{self.config.ollama_base_url.rstrip('/')}/api/chat"
+        payload = {
+            "model": self.config.vlm_ollama_model,
+            "stream": False,
+            "format": "json",
+            "messages": [{"role": "user", "content": prompt, "images": images_b64}],
+            "options": {"temperature": self.config.vlm_output_temperature},
+        }
+        try:
+            resp = requests.post(url, json=payload, timeout=self.config.vlm_output_timeout)
+            resp.raise_for_status()
+            raw = resp.json().get("message", {}).get("content", "")
+        except (requests.RequestException, ValueError) as exc:
+            logger.warning("Ollama VLM call failed: %s", exc)
+            return None
+
+        data = _extract_json_object(raw)
+        if not data or "answer" not in data:
+            logger.warning("VLM reply not parseable as expected JSON: %.120s", raw)
+            return None
+
+        evidence = data.get("evidence", [])
+        if isinstance(evidence, str):
+            evidence = [evidence]
+        return VLMOutput(
+            answer=str(data.get("answer", "")),
+            label=str(data.get("label", "unknown")),
+            evidence=[str(e) for e in evidence][:8],
+        )
+
+    def _elements_to_text(self, elements: List[IFCElementInfo]) -> str:
+        """Key=value grounding text for the VLM prompt (not stored in samples)."""
+        lines: List[str] = []
+        for e in elements[: self.config.vlm_context_max_elements]:
+            kv = " | ".join(f"{k}={v}" for k, v in list(e.properties.items())[:8])
+            name = e.name or "-"
+            lines.append(f"- {e.ifc_type} | GlobalId={e.global_id} | Name={name}"
+                         + (f" | {kv}" if kv else ""))
+        return "\n".join(lines)
+
+    def _write_element_catalog(self, elements: List[IFCElementInfo], model_id: str) -> None:
+        """
+        Dump per-IFC element properties to <out_dir>/bim_elements.json.
+
+        A passive audit/verification artifact keyed by GlobalId (joins to each
+        sample's metadata.bim_element_ids). Not a rule engine; just a dump.
+        """
+        if not self.config.vlm_write_bim_catalog:
+            return
+        catalog = {
+            "model_id": model_id,
+            "element_count": len(elements),
+            "elements": {
+                e.global_id: {
+                    "ifc_type": e.ifc_type,
+                    "name": e.name,
+                    "properties": e.properties,
+                    "render_path": e.render_path,
+                }
+                for e in elements
+            },
+        }
+        path = self.output_root / "bim_elements.json"
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(catalog, fh, ensure_ascii=False, indent=2)
+            logger.info("Wrote BIM element catalog: %s (%d elements)", path.name, len(elements))
+        except OSError as exc:
+            logger.warning("Could not write BIM element catalog: %s", exc)
 
     def _append_sample(self, sample: VLMSample) -> None:
         with open(self.jsonl_path, "a", encoding="utf-8") as fh:
