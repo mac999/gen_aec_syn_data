@@ -25,8 +25,10 @@ _(none)_
   ComfyUI site-photo synthesis unchanged.
 - **Delivered (2026-08-02):**
   - `vlm_tasks` (config): each task emits one sample per render with its own
-    `images` (`site` only, or `bim`+`site`) and `instruction`. Defaults:
-    `site_description` (1 image), `bim_site_comparison` (2 images).
+    `images` (`site` only, or `bim`+`site`), `instruction`, and `labels`
+    (allowed `output.label`, injected into the VLM prompt so the verdict fits
+    the task). Five built-in tasks: `site_description`, `element_detection`,
+    `material_identification`, `progress_assessment`, `bim_site_comparison`.
   - `vlm_output_backend:"vlm"`: sample `output` (answer/label/evidence) generated
     by an Ollama vision model (`vlm_ollama_model`, default `qwen2.5vl:7b`) via
     `/api/chat` on the sample's own images. No ruleset. `"template"` = legacy.
