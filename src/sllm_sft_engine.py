@@ -29,6 +29,87 @@ from .schemas import DocumentChunk, EvidenceBlock, SFTInput, SFTInputMetadata, S
 
 logger = logging.getLogger("AEC_Pipeline.sllm_engine")
 
+# Reasoning models (qwen3, gpt-oss) may wrap their answer in a <think> block.
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+# Trailing commas before a closing brace/bracket — the one malformation worth
+# repairing, since it is a pure syntax slip that does not touch content.
+_TRAILING_COMMA_RE = re.compile(r",(\s*[}\]])")
+
+
+def _iter_brace_spans(text: str):
+    """
+    Yield every top-level ``{...}`` substring, honouring string literals.
+
+    A plain ``re.search(r"\\{.*\\}", ...)`` grabs from the first brace to the
+    last, so a stray ``{`` in reasoning text before the JSON swallows the whole
+    reply and it fails to parse. Scanning with real brace-depth, and skipping
+    braces inside quoted strings, isolates each candidate object instead.
+    """
+    depth = 0
+    start = -1
+    in_str = False
+    escaped = False
+    for i, ch in enumerate(text):
+        if in_str:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start >= 0:
+                    yield text[start:i + 1]
+
+
+def _extract_json_object(raw: str) -> Optional[Dict]:
+    """
+    Recover the QA JSON object from a raw LLM reply.
+
+    Order matters: a clean reply is parsed verbatim first, so nothing that
+    already parses is altered — this only rescues replies the strict path
+    would discard, and never changes accepted content. Strategy:
+
+      1. json.loads on the whole (fence/think-stripped) string.
+      2. Each balanced ``{...}`` span, preferring one with ``qa_pairs`` /
+         ``instruction``; try it as-is, then with trailing commas removed.
+    """
+    if not raw:
+        return None
+
+    cleaned = _THINK_RE.sub("", raw).strip()
+    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r"```\s*$", "", cleaned, flags=re.MULTILINE).strip()
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    candidates = list(_iter_brace_spans(cleaned))
+    # A QA object is what we want; fall back to any balanced object.
+    candidates.sort(
+        key=lambda s: ("qa_pairs" in s or '"instruction"' in s, len(s)),
+        reverse=True,
+    )
+    for span in candidates:
+        for attempt in (span, _TRAILING_COMMA_RE.sub(r"\1", span)):
+            try:
+                return json.loads(attempt)
+            except json.JSONDecodeError:
+                continue
+    return None
+
+
 # ── Prompt template (multi-QA, both backends) ─────────────────────────────
 # Uses {{/}} for literal JSON braces; {var} for substitution variables.
 
@@ -289,21 +370,7 @@ class SLLM_SFT_Engine:
     def _parse_multi_output(
         self, raw: str, chunk: DocumentChunk
     ) -> List[SFTSample]:
-        raw = raw.strip()
-        raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.MULTILINE)
-        raw = re.sub(r"```\s*$", "", raw, flags=re.MULTILINE)
-        raw = raw.strip()
-
-        data: Optional[Dict] = None
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            match = re.search(r"\{.*\}", raw, re.DOTALL)
-            if match:
-                try:
-                    data = json.loads(match.group())
-                except json.JSONDecodeError:
-                    pass
+        data = _extract_json_object(raw)
 
         if not data:
             logger.warning(

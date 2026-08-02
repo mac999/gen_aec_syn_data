@@ -11,6 +11,7 @@ The pipeline that ingests AEC source documents and 3D BIM models (IFC) to automa
   <img src="./test/real_image/Duplex_A_20110907_1_perspective.png" height="260"></img></br>  
   <img src="./doc/img3.png" height="250"></img></br>
 </p>
+
 ---
 
 ## Table of Contents
@@ -765,6 +766,17 @@ IFC mesh ─┬─► z-buffer ─► colour render ─────────�
 ---
 
 ## Revision History
+
+### v0.3.1 — Parser robustness, metadata accuracy
+
+- SFT JSON parser rewritten around balanced-brace scanning: strips `<think>`
+  blocks, isolates the QA object even when the reply carries surrounding prose
+  or stray braces, and repairs trailing commas. A clean reply is still parsed
+  verbatim first, so accepted samples are unchanged — this only recovers
+  replies that were previously discarded and retried.
+- DAPT `source_date` now taken from a year in the file name (e.g.
+  `…매뉴얼(2024).pdf`) when present, overriding the model's guess from the
+  opening pages.
 
 ### v0.3 — VLM realism, corpus quality
 
