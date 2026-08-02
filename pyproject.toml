@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gen-aec-syn-data"
+version = "0.3.1"
+description = "AEC Synthetic Dataset Generation Pipeline (100% Local Edition): generate sLLM/VLM training datasets from PDF documents and IFC/BIM models."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [{ name = "mac999", email = "laputa99999@gmail.com" }]
+keywords = ["AEC", "BIM", "IFC", "construction", "synthetic-data", "LLM", "VLM", "dataset", "fine-tuning"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# Kept in sync with requirements.txt
+dependencies = [
+    "PyMuPDF>=1.23.0",
+    "ifcopenshell>=0.7.0",
+    "langchain>=0.2.0",
+    "langchain-community>=0.2.0",
+    "langchain-core>=0.2.0",
+    "langchain-ollama>=0.1.0",
+    "pydantic>=2.5.0",
+    "numpy>=1.24.0",
+    "Pillow>=10.0.0",
+    "matplotlib>=3.7.0",
+    "requests>=2.31.0",
+    "tqdm>=4.65.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["build>=1.0", "twine>=5.0"]
+
+[project.scripts]
+aec-pipeline = "gen_aec_syn_data.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/mac999/gen_aec_syn_data"
+Repository = "https://github.com/mac999/gen_aec_syn_data"
+Issues = "https://github.com/mac999/gen_aec_syn_data/issues"
+
+[tool.setuptools]
+# The importable package `gen_aec_syn_data` lives in the existing `src/` folder.
+packages = ["gen_aec_syn_data"]
+package-dir = { "gen_aec_syn_data" = "src" }

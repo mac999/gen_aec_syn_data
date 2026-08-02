@@ -213,15 +213,26 @@ class PipelineConfig:
         Build a config from the project's config.json if present, otherwise
         fall back to the built-in dataclass defaults.
 
-        path: explicit JSON path; when None, looks for ``config.json`` in the
-              project root (the directory containing this ``src/`` package).
+        path: explicit JSON path; when None, searches (in order) the current
+              working directory and the project root (the directory containing
+              this ``src/`` package). The cwd lookup lets a pip-installed CLI
+              pick up a ``config.json`` next to where the user runs it.
         """
-        if path is None:
-            path = Path(__file__).resolve().parent.parent / "config.json"
-        path = Path(path)
-        if path.exists():
-            logger.info("Loading default config from %s", path)
-            return cls.from_json(path)
+        if path is not None:
+            path = Path(path)
+            if path.exists():
+                logger.info("Loading default config from %s", path)
+                return cls.from_json(path)
+        else:
+            candidates = (
+                Path.cwd() / "config.json",
+                Path(__file__).resolve().parent.parent / "config.json",
+            )
+            for candidate in candidates:
+                if candidate.exists():
+                    logger.info("Loading default config from %s", candidate)
+                    return cls.from_json(candidate)
+            path = candidates[0]
         logger.info("Default config '%s' not found; using built-in defaults.", path)
         return cls()
 

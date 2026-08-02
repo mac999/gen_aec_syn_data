@@ -6,8 +6,7 @@ appropriate engine, and writes sLLM / VLM JSONL datasets to output/.
 
 Usage (from Python)
 -------------------
-    from src.pipeline import AECPipeline
-    from src.config import PipelineConfig
+    from gen_aec_syn_data import AECPipeline, PipelineConfig
 
     cfg = PipelineConfig()
     pipeline = AECPipeline(cfg)
