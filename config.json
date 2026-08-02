@@ -77,6 +77,29 @@
     "강구조": "structural steel frame, bolted connections, primer-coated steel beams",
     "복합구조": "mixed concrete and steel structure, composite deck"
   },
+  "vlm_output_backend": "vlm",
+  "vlm_ollama_model": "qwen2.5vl:7b",
+  "vlm_output_temperature": 0.2,
+  "vlm_output_timeout": 180,
+  "vlm_context_max_elements": 10,
+  "vlm_write_bim_catalog": true,
+  "vlm_tasks": [
+    {
+      "task_type": "site_description",
+      "images": [
+        "site"
+      ],
+      "instruction": "이 건설 현장 사진을 보고 보이는 구조 요소와 공정(시공) 상태를 구체적으로 설명하라."
+    },
+    {
+      "task_type": "bim_site_comparison",
+      "images": [
+        "bim",
+        "site"
+      ],
+      "instruction": "첫 번째 BIM 렌더링과 두 번째 현장 사진을 비교하여, 설계 대비 현장의 일치/불일치 요소를 근거와 함께 구체적으로 설명하라."
+    }
+  ],
   "max_samples_per_doc": 50,
   "batch_size": 5,
   "llm_max_retries": 3,

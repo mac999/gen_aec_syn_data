@@ -249,6 +249,47 @@ class PipelineConfig:
     # Optional per-trade prompt fragment appended to the positive prompt.
     vlm_trade_prompts: dict = field(default_factory=dict)
 
+    # ── VLM output generation (VLM-in-the-loop) ───────────────────────────
+    # BIM renders and ComfyUI site-photo synthesis are UNCHANGED; this only
+    # controls how each VLMSample.output (answer/label/evidence) is produced.
+    #   "template" — fixed placeholder text (legacy default; no model needed)
+    #   "vlm"      — call an Ollama vision model on the sample's own images to
+    #                generate a grounded {answer, label, evidence}. No ruleset.
+    vlm_output_backend: str = "template"
+    vlm_ollama_model: str = "qwen2.5vl:7b"   # Ollama vision model tag
+    vlm_output_temperature: float = 0.2
+    vlm_output_timeout: int = 180            # seconds per VLM call
+    # BIM element properties are passed to the VLM as grounding context (they are
+    # NOT written into the sample). Cap how many elements go into that text.
+    vlm_context_max_elements: int = 10
+    # Write a per-IFC sidecar catalog of element properties — an audit/verification
+    # asset (a plain dump of IFCElementInfo, never a rule engine).
+    vlm_write_bim_catalog: bool = True
+    # Per-task dataset spec: each entry emits one VLMSample per eligible render.
+    #   task_type   — free label stored on the sample
+    #   images      — which images to attach, from {"bim", "site"} (order kept)
+    #   instruction — task prompt; {project_type}/{trade_type}/{view_type} filled
+    vlm_tasks: List[dict] = field(
+        default_factory=lambda: [
+            {
+                "task_type": "site_description",
+                "images": ["site"],
+                "instruction": (
+                    "이 건설 현장 사진을 보고 보이는 구조 요소와 공정(시공) 상태를 "
+                    "구체적으로 설명하라."
+                ),
+            },
+            {
+                "task_type": "bim_site_comparison",
+                "images": ["bim", "site"],
+                "instruction": (
+                    "첫 번째 BIM 렌더링과 두 번째 현장 사진을 비교하여, 설계 대비 "
+                    "현장의 일치/불일치 요소를 근거와 함께 구체적으로 설명하라."
+                ),
+            },
+        ]
+    )
+
     # ── sLLM SFT prompt customisation ─────────────────────────────────────
     # User-editable QA-generation templates. Empty string → built-in default.
     # Keep placeholders {n} {doc_id} {chunk_index} {text}; double literal braces.

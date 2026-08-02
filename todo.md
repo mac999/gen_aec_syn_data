@@ -9,30 +9,36 @@ the files touched. Newest entries first within each section.
 
 ## Open
 
-### [ ] VLM input: add BIM element JSON grounding (schema-safe)
-- **Source:** reviewer feedback (2026-08).
-- **Request:** compose the VLM input as `{render image, site photo, BIM element JSON}`
-  instead of prose-only evidence, to improve training efficiency and make the
-  evidence verifiable (currently `VLMOutput.evidence` is free prose).
-- **Hard constraint:** the existing VLM training-data schema (`VLMSample`) MUST
-  NOT change structure.
-- **Recommended approach (no schema change) — sidecar catalog + foreign key:**
-  - IFC→JSON per element already exists: `IFCElementInfo.properties` built in
-    `src/ifc_processor.py` (`_extract_elements` / `_collect_properties`). Today
-    only `global_id`s reach the sample; the rich `properties` are discarded.
-  - Emit a sidecar catalog per VLM output dir, e.g.
-    `output/<ifc>_vlm/bim_elements.json = { global_id: {ifc_type, name, properties, render_path} }`.
-  - Keep `VLMSample` byte-identical: `metadata.bim_element_ids` already links
-    each sample to its elements (foreign key). The training adapter joins
-    `bim_element_ids` → catalog at load time to build the `{render, site_photo,
-    BIM element JSON}` input.
-  - Evidence can then cite specific `global_id`s (still `List[str]`, no schema
-    change), which makes it checkable against the catalog.
-- **Status:** DEFERRED (not started) — parked here on 2026-08-02 at user request.
+_(none)_
 
 ---
 
 ## Done
+
+### [x] VLM: task-driven datasets + VLM-in-the-loop output (schema-safe)
+- **Source:** reviewer feedback (2026-08), refined over discussion.
+- **Request evolution:** originally "add BIM element JSON to VLM input." Refined
+  after noting (a) `VLMSample` has no input/context field, (b) property text and
+  the answer play different roles per `task_type`, and (c) rule-based labels cost
+  maintenance. Landed on: per-task generation + VLM-in-the-loop output, no rules.
+- **Hard constraint (met):** `VLMSample` schema structure unchanged; BIM render +
+  ComfyUI site-photo synthesis unchanged.
+- **Delivered (2026-08-02):**
+  - `vlm_tasks` (config): each task emits one sample per render with its own
+    `images` (`site` only, or `bim`+`site`) and `instruction`. Defaults:
+    `site_description` (1 image), `bim_site_comparison` (2 images).
+  - `vlm_output_backend:"vlm"`: sample `output` (answer/label/evidence) generated
+    by an Ollama vision model (`vlm_ollama_model`, default `qwen2.5vl:7b`) via
+    `/api/chat` on the sample's own images. No ruleset. `"template"` = legacy.
+  - Per-IFC `bim_elements.json` sidecar (keyed by `GlobalId`) — a cheap passive
+    audit/verification dump, NOT a rule engine. Joins to `metadata.bim_element_ids`.
+  - BIM properties passed to the VLM as grounding text only (not stored in sample).
+- **Known tradeoff:** site photos are synthetic, so VLM `label`s are weak
+  supervision; verification is left to the sidecar (optionally a future
+  model-as-judge pass — still no rules).
+- **Tests:** 27 checks (schema-unchanged, per-task fan-out, image sets, sidecar,
+  mocked VLM parse/fallback) + real end-to-end call on an existing image.
+- **Files:** `src/config.py`, `src/vlm_engine.py`, `config.json`, README, version.
 
 ### [x] SFT negative samples + config-driven, user-editable prompt templates
 - **Source:** reviewer feedback (2026-08).
