@@ -1,11 +1,104 @@
 from __future__ import annotations
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import List
 
 logger = logging.getLogger("AEC_Pipeline.config")
+
+# ── SFT prompt templates ─────────────────────────────────────────────────────
+# Stored here (and surfaced in config.json) so users can tune generation without
+# code changes, mirroring how vlm_positive_prompt/vlm_negative_prompt are handled.
+# Every template MUST keep the placeholders {n}, {doc_id}, {chunk_index}, {text};
+# literal JSON braces must stay doubled ({{ }}). SLLM_SFT_Engine validates this on
+# start-up. Set the matching config fields to "" to fall back to these defaults.
+SFT_TEMPLATE_PLACEHOLDERS = ("n", "doc_id", "chunk_index", "text")
+
+DEFAULT_SFT_PROMPT_TEMPLATE = """\
+당신은 AEC(건축·엔지니어링·건설) 분야 전문 데이터 합성기입니다.
+아래 문서 청크를 읽고, 건설 법규 LLM 파인튜닝에 적합한 고품질 질문-답변 쌍을 {n}개 생성하세요.
+
+규칙:
+- 각 질문은 반드시 주어진 청크의 내용만으로 답할 수 있어야 합니다.
+- 각 답변은 특정 조항, 표, 또는 수치를 반드시 인용해야 합니다.
+- 질문과 답변은 반드시 한국어로 작성하세요.
+- 서로 다른 관점의 질문을 생성하세요 (예: 정의, 절차, 기준, 처벌 등).
+- domain_tags는 관련 AEC 도메인 태그 2~4개로 구성하세요 (예: 구조, 안전, 설비, 기계, 전기, 건축, 토목, 소방 등).
+- final_label은 내용에 맞게 "compliant", "non_compliant", "answerable", "unanswerable" 중 하나로 설정하세요.
+- 유효한 JSON만 응답하세요 — 마크다운 코드 펜스나 추가 텍스트 없이.
+
+JSON 스키마:
+{{
+  "qa_pairs": [
+    {{
+      "instruction": "<구체적인 한국어 질문>",
+      "input": {{
+        "context": "<관련 문서 chunk 또는 조항 전문>",
+        "metadata": {{"project_type": "<건축|교량|터널|도로|댐 등>", "language": "ko"}}
+      }},
+      "output": {{
+        "answer": "<정확하고 근거 있는 한국어 답변>",
+        "evidence": [
+          {{
+            "doc_id": "{doc_id}",
+            "section": "<조항 또는 절 참조, 예: '제3조 2항'>"
+          }}
+        ],
+        "final_label": "<compliant|non_compliant|answerable|unanswerable>"
+      }},
+      "domain_tags": ["<태그1>", "<태그2>"],
+      "source_doc_ids": ["{doc_id}"]
+    }}
+  ]
+}}
+
+문서 청크 (doc_id={doc_id}, chunk={chunk_index}):
+---
+{text}
+---
+
+JSON 응답:"""
+
+DEFAULT_SFT_NEGATIVE_PROMPT_TEMPLATE = """\
+당신은 AEC(건축·엔지니어링·건설) 분야 전문 데이터 합성기입니다.
+아래 문서 청크를 읽고, "근거 부족으로 답할 수 없는" 부정(negative) 학습 샘플 {n}개를 생성하세요.
+목적: 모델이 주어진 근거만으로 답할 수 없을 때, 답을 지어내지 않고 정직하게 한계를 밝히도록 학습시키는 것입니다.
+
+규칙:
+- 각 질문은 이 청크와 같은 건설 도메인의 그럴듯한 질문이되, 청크 내용만으로는 답할 수 없어야 합니다 (필요한 수치·조항·정의가 청크에 없음).
+- 답변(answer)은 반드시 "제공된 근거만으로는 답할 수 없다"는 취지로 정직하게 밝히세요. 사실을 지어내지 마세요.
+- evidence 배열은 반드시 빈 배열([])로 두세요.
+- final_label은 반드시 "unanswerable"로 설정하세요.
+- 질문과 답변은 반드시 한국어로 작성하세요.
+- 유효한 JSON만 응답하세요 — 마크다운 코드 펜스나 추가 텍스트 없이.
+
+JSON 스키마:
+{{
+  "qa_pairs": [
+    {{
+      "instruction": "<청크로 답할 수 없는 구체적인 한국어 질문>",
+      "input": {{
+        "context": "<관련 문서 chunk 또는 조항 전문>",
+        "metadata": {{"project_type": "<건축|교량|터널|도로|댐 등>", "language": "ko"}}
+      }},
+      "output": {{
+        "answer": "<제공된 근거만으로는 답할 수 없다는 정직한 설명>",
+        "evidence": [],
+        "final_label": "unanswerable"
+      }},
+      "domain_tags": ["<태그1>", "<태그2>"],
+      "source_doc_ids": ["{doc_id}"]
+    }}
+  ]
+}}
+
+문서 청크 (doc_id={doc_id}, chunk={chunk_index}):
+---
+{text}
+---
+
+JSON 응답:"""
 
 
 @dataclass
@@ -156,7 +249,16 @@ class PipelineConfig:
     # Optional per-trade prompt fragment appended to the positive prompt.
     vlm_trade_prompts: dict = field(default_factory=dict)
 
-    # Processing limits 
+    # ── sLLM SFT prompt customisation ─────────────────────────────────────
+    # User-editable QA-generation templates. Empty string → built-in default.
+    # Keep placeholders {n} {doc_id} {chunk_index} {text}; double literal braces.
+    sft_prompt_template: str = DEFAULT_SFT_PROMPT_TEMPLATE
+    sft_negative_prompt_template: str = DEFAULT_SFT_NEGATIVE_PROMPT_TEMPLATE
+    # Fraction (0.0–1.0) of chunks that generate "unanswerable" negative samples
+    # instead of positive QA pairs. 0.0 disables negatives (backward-compatible).
+    sft_negative_ratio: float = 0.0
+
+    # Processing limits
     max_samples_per_doc: int = 50
     batch_size: int = 5
 
@@ -244,6 +346,18 @@ class PipelineConfig:
         for key in ("input_dir", "output_dir"):
             if key in data:
                 data[key] = Path(data[key])
+        # Be defensive: silently accepting unknown keys via cls(**data) would
+        # raise a TypeError and abort the whole run over a stray/renamed field.
+        # Drop unknowns (with a warning) so an old or hand-edited config.json
+        # keeps loading; missing keys just fall back to the dataclass defaults.
+        known = {f.name for f in fields(cls)}
+        unknown = set(data) - known
+        if unknown:
+            logger.warning(
+                "Ignoring %d unknown config key(s): %s",
+                len(unknown), ", ".join(sorted(unknown)),
+            )
+            data = {k: v for k, v in data.items() if k in known}
         return cls(**data)
 
     def to_json(self, config_path: str | Path) -> None:
