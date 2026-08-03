@@ -10,3 +10,6 @@ __pycache__/
 build/
 dist/
 *.egg-info/
+
+# Local-only notes (kept out of the repo)
+todo.md
