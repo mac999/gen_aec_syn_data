@@ -887,6 +887,24 @@ A generated `material_identification` sample (schema unchanged; only content var
 > photo is model-derived, so treat VLM `label`s as weak supervision; the
 > `bim_elements.json` sidecar is there for later verification.
 
+#### Example: a generated per-task dataset
+
+`test/vlm_by_task/` holds a real sample generated from `Duplex_A_20110907.ifc`
+(127 IFC elements) and `qwen2.5vl:7b` — one render fanned out into five tasks:
+
+| `task_type`             | images     | generated `label` | answer excerpt                                   |
+| ----------------------- | ---------- | ----------------- | ------------------------------------------------ |
+| `site_description`      | site       | `clear`           | "외벽과 내부 분리 벽… 콘크리트 벽"                |
+| `element_detection`     | site       | `detected`        | "벽: … **LoadBearing=False, IsExternal=True**"   |
+| `material_identification` | site     | `철근콘크리트`     | "철근콘크리트 벽체"                               |
+| `progress_assessment`   | site       | `foundation`      | "기초 단계… 상부 구조물 미설치"                    |
+| `bim_site_comparison`   | bim + site | `match`           | "외부 벽 위치·높이 일치"                          |
+
+Each label stays within that task's `labels` set, and the VLM cites real IFC
+property values (e.g. `LoadBearing`, `IsExternal`). Every sample's
+`metadata.bim_element_ids` joins to `test/vlm_by_task/bim_elements.json` (keyed
+by `GlobalId`) for verification — the schema is unchanged across all five.
+
 ---
 
 ## Depth-conditioned site-photo synthesis
@@ -958,6 +976,9 @@ IFC mesh ─┬─► z-buffer ─► colour render ─────────�
   `metadata.bim_element_ids`) is written as a passive audit/verification asset.
 - **Unchanged:** BIM rendering and ComfyUI depth-conditioned site-photo
   synthesis are exactly as in v0.3.
+- Example dataset checked in at `test/vlm_by_task/` (5 per-task samples +
+  `bim_elements.json`), generated from `Duplex_A_20110907.ifc` with
+  `qwen2.5vl:7b` — see [VLM tasks & output generation](#vlm-tasks--output-generation-vlm-in-the-loop).
 
 ### v0.3.1 — Parser robustness, metadata accuracy
 
