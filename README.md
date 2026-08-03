@@ -130,7 +130,9 @@ gen_aec_syn_data/
 
 ### 1. Ollama (Local LLM)
 
-Ollama serves the language model that generates sLLM QA pairs locally.
+Ollama serves the local language model that generates **sLLM QA pairs** (text),
+and — for VLM-in-the-loop — the **vision model** that writes each VLM sample's
+output. One server covers both.
 
 **Install Ollama**
 
@@ -174,6 +176,34 @@ ollama pull llama3:8b-instruct-q4_K_M
 > **Reasoning models** (qwen3, gpt-oss): leave `ollama_json_mode` at `false`.
 > See [Ollama generation limits](#ollama-generation-limits).
 
+**Pull a vision model (for VLM-in-the-loop)**
+
+When `vlm_output_backend` is `"ollama"`, the same server runs a **vision** model
+that generates each VLM sample's `output` (answer/label/evidence). Pull it once —
+the pipeline does **not** pull it or start the server for you:
+
+```bash
+ollama pull qwen2.5vl:7b        # must match vlm_ollama_model in config.json
+```
+
+| Model (Ollama tag)      | VRAM (Q4) | Multi-image¹ | Korean | Notes                             |
+| ----------------------- | --------- | ------------ | ------ | --------------------------------- |
+| `qwen2.5vl:3b`        | ~3 GB     | ✓            | ★★★  | lightest; 8 GB VRAM class         |
+| **`qwen2.5vl:7b`**    | ~6 GB     | ✓            | ★★★★ | **default — good balance**        |
+| `qwen2.5vl:32b`       | ~21 GB    | ✓            | ★★★★★| higher quality; needs 24 GB+      |
+| `qwen2.5vl:72b`       | ~48 GB    | ✓            | ★★★★★| best; large-VRAM / unified memory |
+| `llama3.2-vision:11b` | ~8 GB     | ~ (weak)     | ★★★  | single-image tasks only           |
+
+¹ *Multi-image matters for the `bim_site_comparison` task (BIM + site in one
+prompt); Qwen2.5-VL handles multiple images well, Llama-3.2-Vision does not.*
+
+Model pages / downloads: [Qwen2.5-VL](https://ollama.com/library/qwen2.5vl)
+· [Llama-3.2-Vision](https://ollama.com/library/llama3.2-vision)
+· [Qwen2.5-VL on HuggingFace](https://huggingface.co/collections/Qwen/qwen25-vl-6795ffac22b334a837c0f9a5).
+Prefer a cloud model, or no local GPU for vision? The **Gemini** backend
+([§3](#3-google-gemini-api-optional-cloud-backend)) generates VLM output too —
+set `vlm_output_backend: "gemini"`.
+
 Verify the server is running:
 
 ```bash
@@ -183,6 +213,10 @@ curl http://localhost:11434/api/tags
 ---
 
 ### 2. llama-server (Fast Local LLM — Recommended)
+
+> **Scope:** llama-server is an **sLLM (text)** backend for SFT/DAPT generation
+> only. It is **not** used for VLM vision output — for that use the Ollama vision
+> model (§1) or Gemini (§3).
 
 llama-server is the HTTP inference server bundled with [llama.cpp](https://github.com/ggerganov/llama.cpp). Compared to Ollama it offers:
 
@@ -268,9 +302,17 @@ curl http://localhost:8080/health
 
 ### 3. Google Gemini API (Optional Cloud Backend)
 
-Gemini is an **optional** backend for SFT synthesis when you prefer a hosted model over local Ollama / llama-server. It returns JSON-enforced output (`response_mime_type="application/json"`) and requires no GPU.
+Gemini is an **optional** hosted backend, usable for **both** paths (no GPU needed):
 
-> Skip this section if you only use local backends. Note: with Gemini, document chunks are sent to Google's API — it is **not** a 100%-local path.
+- **sLLM SFT** synthesis — set `--backend gemini` (or `llm_backend: "gemini"`).
+- **VLM output** generation — set `vlm_output_backend: "gemini"`. `gemini-2.5-flash`
+  is multimodal, so it reads the sample images just like the Ollama vision model.
+
+Both reuse the same `gemini_api_key` / `gemini_model`, and it returns
+JSON-enforced output (`response_mime_type="application/json"`).
+
+> Skip this section if you only use local backends. Note: with Gemini, document
+> chunks **and VLM images** are sent to Google's API — it is **not** a 100%-local path.
 
 **Install the SDK**
 
@@ -831,7 +873,7 @@ unchanged; tasks differ only by `task_type`, `images`, `instruction`, `output`.
 
 | Parameter                    | Default                          | Description                                                                                     |
 | ---------------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `vlm_output_backend`       | `template`                     | `"vlm"` = generate output with the Ollama vision model; `"template"` = legacy, no model needed |
+| `vlm_output_backend`       | `template`                     | `"ollama"` = Ollama vision model, `"gemini"` = Gemini multimodal, `"template"` = no model (see backends below) |
 | `vlm_ollama_model`         | `qwen2.5vl:7b`                 | Ollama vision model tag (`ollama pull` it first; use a multi-image model for comparison tasks)  |
 | `vlm_output_temperature`   | `0.2`                          | Sampling temperature for the VLM output call                                                     |
 | `vlm_output_timeout`       | `180`                          | Seconds per VLM call                                                                             |
@@ -886,45 +928,29 @@ A generated `material_identification` sample (schema unchanged; only content var
 > The synthesised site photo is model-derived, so treat VLM `label`s as weak
 > supervision; the `bim_elements.json` sidecar is there for later verification.
 
-#### Vision model (Ollama) — required, not auto-started
+#### Output backend — consistent with the sLLM backends, not auto-started
 
-VLM-in-the-loop calls a **local Ollama server** (same server as the sLLM Ollama
-backend, [Prerequisites §1](#1-ollama-local-llm)). The pipeline does **not** launch
-Ollama or pull the model for you — do both once before running with
-`vlm_output_backend:"vlm"`:
+`vlm_output_backend` mirrors the sLLM `llm_backend` choices:
+
+| `vlm_output_backend` | runs on                          | setup                                                             |
+| -------------------- | -------------------------------- | ---------------------------------------------------------------- |
+| `ollama`           | local Ollama vision model        | [Prerequisites §1](#1-ollama-local-llm) — `ollama pull qwen2.5vl:7b` |
+| `gemini`           | Gemini multimodal API            | [Prerequisites §3](#3-google-gemini-api-optional-cloud-backend) — set the key |
+| `template`         | none (honest-empty placeholder)  | —                                                                |
+
+> llama-server is **sLLM-text-only** and is not a VLM vision backend.
+
+The pipeline does **not** start Ollama or pull the model for you — bring the
+chosen backend up first (see the linked prerequisites), then run:
 
 ```bash
-# 1. Make sure the Ollama server is running (separate terminal / service)
-ollama serve                     # skip if already running as a service
-
-# 2. Pull the vision model named in config.json (vlm_ollama_model)
-ollama pull qwen2.5vl:7b
-
-# 3. Now run the pipeline; each sample's output is generated by the model
+ollama serve && ollama pull qwen2.5vl:7b      # for vlm_output_backend: "ollama"
 python main.py --ifc input/Duplex_A_20110907.ifc
 ```
 
-If the server is unreachable or the model is missing, output generation fails per
-sample and falls back to an empty `output` (a warning is logged) — image
+If the backend is unreachable or the model is missing, output generation fails
+per sample and falls back to an empty `output` (a warning is logged) — image
 synthesis and the rest of the run are unaffected.
-
-**Recommended vision models** (all run in Ollama — `ollama pull <tag>`):
-
-| Model (Ollama tag)      | VRAM (Q4) | Multi-image¹ | Korean | Notes                              |
-| ----------------------- | --------- | ------------ | ------ | ---------------------------------- |
-| `qwen2.5vl:3b`        | ~3 GB     | ✓            | ★★★  | lightest; 8 GB VRAM class          |
-| **`qwen2.5vl:7b`**    | ~6 GB     | ✓            | ★★★★ | **default — good balance**         |
-| `qwen2.5vl:32b`       | ~21 GB    | ✓            | ★★★★★| higher quality; needs 24 GB+       |
-| `qwen2.5vl:72b`       | ~48 GB    | ✓            | ★★★★★| best; large-VRAM / unified memory  |
-| `llama3.2-vision:11b` | ~8 GB     | ~ (weak)     | ★★★  | fine for single-image tasks only   |
-
-¹ *Multi-image matters for `bim_site_comparison` (BIM + site in one prompt);
-Qwen2.5-VL handles multiple images well, Llama-3.2-Vision is single-image-oriented.*
-
-Model pages / downloads: [Qwen2.5-VL on Ollama](https://ollama.com/library/qwen2.5vl)
-· [Llama-3.2-Vision on Ollama](https://ollama.com/library/llama3.2-vision)
-· [Qwen2.5-VL on HuggingFace](https://huggingface.co/collections/Qwen/qwen25-vl-6795ffac22b334a837c0f9a5).
-Point `vlm_ollama_model` in `config.json` at whichever tag you pulled.
 
 #### Example: a generated per-task dataset
 
@@ -985,6 +1011,15 @@ IFC mesh ─┬─► z-buffer ─► colour render ─────────�
 
 ## Revision History
 
+### v0.4.1 — Consistent VLM output backends
+
+- `vlm_output_backend` now mirrors the sLLM `llm_backend` choices: `"ollama"`
+  (vision model) **or** `"gemini"` (multimodal, same key/model as the sLLM gemini
+  backend), plus `"template"`. llama-server stays sLLM-text-only.
+- Prerequisites document the VLM vision-model download (§1 Ollama) and note
+  Gemini works for both sLLM and VLM (§3); the pipeline never auto-starts a
+  backend.
+
 ### v0.4 — Config-driven prompts, negative SFT samples, VLM-in-the-loop
 
 **sLLM SFT**
@@ -1007,10 +1042,11 @@ IFC mesh ─┬─► z-buffer ─► colour render ─────────�
   tasks: `site_description`, `element_detection`, `material_identification`,
   `progress_assessment`, `bim_site_comparison`. The `VLMSample` schema is
   **unchanged**.
-- `vlm_output_backend:"vlm"` generates each sample's `output`
-  (answer/label/evidence) by calling an Ollama vision model
-  (`vlm_ollama_model`, default `qwen2.5vl:7b`) on the sample's own images —
-  no ruleset. `"template"` keeps the legacy no-model behaviour.
+- `vlm_output_backend` generates each sample's `output` (answer/label/evidence)
+  on the sample's own images — no ruleset. Backends mirror the sLLM ones for
+  consistency: `"ollama"` (vision model `vlm_ollama_model`, default
+  `qwen2.5vl:7b`) or `"gemini"` (multimodal, shares the sLLM gemini key);
+  `"template"` keeps the legacy no-model behaviour. (llama-server is text-only.)
 - Per-IFC `bim_elements.json` sidecar catalog (keyed by `GlobalId`, joins to
   `metadata.bim_element_ids`) is written as a passive audit/verification asset.
 - **Unchanged:** BIM rendering and ComfyUI depth-conditioned site-photo
