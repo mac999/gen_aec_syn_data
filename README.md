@@ -507,7 +507,38 @@ pip install dist/gen_aec_syn_data-*.whl
 
 ## Usage
 
-### Quick start
+### One-command launch (recommended) — `run_pipeline`
+
+An all-in-one launcher does the prerequisites for you: it **starts the Ollama
+server if it isn't running, pulls the LLM/VLM models named in `config.json`,
+creates the Python venv + installs requirements on first run, then runs the
+pipeline.** Any extra arguments are forwarded to `main.py`.
+
+```bash
+# Ubuntu / Linux
+./run_pipeline.sh                                   # scan ./input for PDF + IFC
+./run_pipeline.sh --ifc input/Duplex_A_20110907.ifc # VLM only, a specific IFC
+```
+
+```bat
+:: Windows
+run_pipeline.bat
+run_pipeline.bat --ifc input\Duplex_A_20110907.ifc
+```
+
+Notes:
+
+- Models are read from `config.json` (`ollama_model`, `vlm_ollama_model`) so the
+  script never drifts; it pulls a model only when that backend is set to
+  `ollama`. The default VLM model is **`qwen2.5vl:7b`** — a good VRAM/quality
+  balance (~6 GB, multi-image, solid Korean).
+- ComfyUI is **not** auto-started (it has its own models/setup, [§4](#4-comfyui-image-synthesis)).
+  If it is unreachable the script warns and site-photo synthesis falls back to
+  copying the BIM render; everything else still runs.
+- First run creates `.venv` and installs `requirements.txt`; delete `.venv` to
+  force a reinstall.
+
+### Quick start (manual)
 
 ```bash
 # Place input files in ./input/
@@ -1022,6 +1053,14 @@ IFC mesh ─┬─► z-buffer ─► colour render ─────────�
 ---
 
 ## Revision History
+
+### v0.4.3 — One-command launchers
+
+- `run_pipeline.sh` (Ubuntu/Linux) and `run_pipeline.bat` (Windows): start the
+  Ollama server, pull the LLM/VLM models named in `config.json` (ollama backends
+  only), set up the venv on first run, then run the pipeline (extra args passed
+  through to `main.py`). ComfyUI is not auto-started (warned, non-fatal).
+- Default VLM model confirmed as `qwen2.5vl:7b` (best VRAM/quality balance).
 
 ### v0.4.2 — Separate Ollama server for VLM
 
