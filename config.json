@@ -77,7 +77,7 @@
     "강구조": "structural steel frame, bolted connections, primer-coated steel beams",
     "복합구조": "mixed concrete and steel structure, composite deck"
   },
-  "vlm_output_backend": "vlm",
+  "vlm_output_backend": "ollama",
   "vlm_ollama_model": "qwen2.5vl:7b",
   "vlm_output_temperature": 0.2,
   "vlm_output_timeout": 180,

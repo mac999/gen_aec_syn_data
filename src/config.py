@@ -252,9 +252,12 @@ class PipelineConfig:
     # ── VLM output generation (VLM-in-the-loop) ───────────────────────────
     # BIM renders and ComfyUI site-photo synthesis are UNCHANGED; this only
     # controls how each VLMSample.output (answer/label/evidence) is produced.
-    #   "template" — fixed placeholder text (legacy default; no model needed)
-    #   "vlm"      — call an Ollama vision model on the sample's own images to
-    #                generate a grounded {answer, label, evidence}. No ruleset.
+    # Mirrors the sLLM `llm_backend` choices for consistency:
+    #   "ollama"   — Ollama vision model (vlm_ollama_model) on the sample images
+    #   "gemini"   — Gemini multimodal API (shares gemini_api_key / gemini_model
+    #                with the sLLM gemini backend)
+    #   "template" — fixed placeholder text (default; no model needed)
+    # (llama-server is sLLM-text-only; it is not used for VLM vision output.)
     vlm_output_backend: str = "template"
     vlm_ollama_model: str = "qwen2.5vl:7b"   # Ollama vision model tag
     vlm_output_temperature: float = 0.2

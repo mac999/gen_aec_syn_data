@@ -28,6 +28,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import time
 import uuid
 import zlib
@@ -685,36 +686,38 @@ class VLMEngine:
         self, task_type: str, image_paths: List[Path], instruction: str,
         bim_context: str, labels: Optional[List[str]] = None,
     ) -> VLMOutput:
-        """Produce output via the configured backend ('vlm' or 'template')."""
-        if self.config.vlm_output_backend == "vlm":
-            out = self._generate_output_via_vlm(image_paths, instruction, bim_context, labels)
-            if out is not None:
-                return out
+        """
+        Produce output via the configured backend, mirroring the sLLM engine's
+        backend choices so the two stay consistent:
+          "ollama" (alias "vlm") — Ollama vision model (default)
+          "gemini"               — Gemini multimodal API (same key as sLLM)
+          "template"/other       — no model; honest-empty placeholder
+        llama-server is sLLM-text-only and is not used for VLM vision output.
+        """
+        backend = self.config.vlm_output_backend
+        prompt = self._build_vlm_prompt(instruction, bim_context, labels)
+        out: Optional[VLMOutput] = None
+        if backend in ("ollama", "vlm"):
+            out = self._generate_output_via_ollama(image_paths, prompt)
+        elif backend == "gemini":
+            out = self._generate_output_via_gemini(image_paths, prompt)
+        elif backend not in ("template", "none", ""):
+            logger.warning("Unknown vlm_output_backend %r — using template output", backend)
+
+        if out is not None:
+            return out
+        if backend in ("ollama", "vlm", "gemini"):
             logger.warning("VLM output generation failed for %s — using empty fallback", task_type)
         # Template / fallback: leave a clearly-empty, honest placeholder rather
         # than a fabricated answer. label 'unknown' == not asserted.
         return VLMOutput(answer="", label="unknown", evidence=[])
 
-    def _generate_output_via_vlm(
-        self, image_paths: List[Path], instruction: str, bim_context: str,
-        labels: Optional[List[str]] = None,
-    ) -> Optional[VLMOutput]:
-        """
-        Call the Ollama vision model on *image_paths* and parse a grounded
-        {answer, label, evidence}. Returns None on any failure so the caller can
-        fall back. No ruleset — the model decides the label from *labels* (the
-        task's allowed verdict vocabulary).
-        """
-        try:
-            images_b64 = [
-                base64.b64encode(p.read_bytes()).decode("ascii") for p in image_paths
-            ]
-        except OSError as exc:
-            logger.warning("Could not read image for VLM call: %s", exc)
-            return None
-
+    def _build_vlm_prompt(
+        self, instruction: str, bim_context: str, labels: Optional[List[str]]
+    ) -> str:
+        """Shared prompt for every VLM backend (label vocabulary injected)."""
         label_opts = "|".join(labels or self._DEFAULT_LABELS)
-        prompt = (
+        return (
             f"{instruction}\n\n"
             "참고용 BIM 요소 속성(정답 판단의 근거로 활용):\n"
             f"{bim_context or '(제공된 속성 없음)'}\n\n"
@@ -723,6 +726,34 @@ class VLMEngine:
             f'"label": "<{label_opts}>", '
             '"evidence": ["<근거1>", "<근거2>"]}'
         )
+
+    @staticmethod
+    def _parse_vlm_json(raw: str) -> Optional[VLMOutput]:
+        """Recover {answer,label,evidence} from a model reply; None on failure."""
+        data = _extract_json_object(raw)
+        if not data or "answer" not in data:
+            logger.warning("VLM reply not parseable as expected JSON: %.120s", raw)
+            return None
+        evidence = data.get("evidence", [])
+        if isinstance(evidence, str):
+            evidence = [evidence]
+        return VLMOutput(
+            answer=str(data.get("answer", "")),
+            label=str(data.get("label", "unknown")),
+            evidence=[str(e) for e in evidence][:8],
+        )
+
+    def _generate_output_via_ollama(
+        self, image_paths: List[Path], prompt: str
+    ) -> Optional[VLMOutput]:
+        """Call the Ollama vision model (/api/chat). None on any failure."""
+        try:
+            images_b64 = [
+                base64.b64encode(p.read_bytes()).decode("ascii") for p in image_paths
+            ]
+        except OSError as exc:
+            logger.warning("Could not read image for VLM call: %s", exc)
+            return None
         url = f"{self.config.ollama_base_url.rstrip('/')}/api/chat"
         payload = {
             "model": self.config.vlm_ollama_model,
@@ -738,20 +769,48 @@ class VLMEngine:
         except (requests.RequestException, ValueError) as exc:
             logger.warning("Ollama VLM call failed: %s", exc)
             return None
+        return self._parse_vlm_json(raw)
 
-        data = _extract_json_object(raw)
-        if not data or "answer" not in data:
-            logger.warning("VLM reply not parseable as expected JSON: %.120s", raw)
+    def _generate_output_via_gemini(
+        self, image_paths: List[Path], prompt: str
+    ) -> Optional[VLMOutput]:
+        """
+        Call the Gemini multimodal API — same key/model as the sLLM gemini
+        backend (`gemini_api_key`, `gemini_model`). None on any failure.
+        """
+        try:
+            from google import genai            # noqa: PLC0415
+            from google.genai import types      # noqa: PLC0415
+        except ImportError:
+            logger.warning("google-genai not installed; cannot use gemini VLM backend")
             return None
-
-        evidence = data.get("evidence", [])
-        if isinstance(evidence, str):
-            evidence = [evidence]
-        return VLMOutput(
-            answer=str(data.get("answer", "")),
-            label=str(data.get("label", "unknown")),
-            evidence=[str(e) for e in evidence][:8],
-        )
+        api_key = self.config.gemini_api_key or os.environ.get("GEMINI_API_KEY", "")
+        if not api_key:
+            logger.warning("Gemini API key not set (gemini_api_key / GEMINI_API_KEY)")
+            return None
+        try:
+            parts = [
+                types.Part.from_bytes(data=p.read_bytes(), mime_type="image/png")
+                for p in image_paths
+            ]
+        except OSError as exc:
+            logger.warning("Could not read image for Gemini VLM call: %s", exc)
+            return None
+        try:
+            client = genai.Client(api_key=api_key)
+            response = client.models.generate_content(
+                model=self.config.gemini_model,
+                contents=[*parts, prompt],
+                config=types.GenerateContentConfig(
+                    temperature=self.config.vlm_output_temperature,
+                    response_mime_type="application/json",
+                ),
+            )
+            raw = response.text
+        except Exception as exc:  # SDK raises various error types
+            logger.warning("Gemini VLM call failed: %s", exc)
+            return None
+        return self._parse_vlm_json(raw)
 
     def _elements_to_text(self, elements: List[IFCElementInfo]) -> str:
         """Key=value grounding text for the VLM prompt (not stored in samples)."""
