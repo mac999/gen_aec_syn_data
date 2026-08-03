@@ -260,6 +260,10 @@ class PipelineConfig:
     # (llama-server is sLLM-text-only; it is not used for VLM vision output.)
     vlm_output_backend: str = "template"
     vlm_ollama_model: str = "qwen2.5vl:7b"   # Ollama vision model tag
+    # Ollama endpoint for the vision model. Empty → reuse ollama_base_url (one
+    # server serves both text + vision). Set to a separate host/port to run the
+    # VLM on its own Ollama server (e.g. pinned to a second GPU).
+    vlm_ollama_base_url: str = ""
     vlm_output_temperature: float = 0.2
     vlm_output_timeout: int = 180            # seconds per VLM call
     # BIM element properties are passed to the VLM as grounding context (they are

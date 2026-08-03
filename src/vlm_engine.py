@@ -754,7 +754,9 @@ class VLMEngine:
         except OSError as exc:
             logger.warning("Could not read image for VLM call: %s", exc)
             return None
-        url = f"{self.config.ollama_base_url.rstrip('/')}/api/chat"
+        # Dedicated VLM endpoint if set, else the shared text/LLM Ollama server.
+        base_url = self.config.vlm_ollama_base_url or self.config.ollama_base_url
+        url = f"{base_url.rstrip('/')}/api/chat"
         payload = {
             "model": self.config.vlm_ollama_model,
             "stream": False,

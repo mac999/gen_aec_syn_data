@@ -204,6 +204,17 @@ Prefer a cloud model, or no local GPU for vision? The **Gemini** backend
 ([§3](#3-google-gemini-api-optional-cloud-backend)) generates VLM output too —
 set `vlm_output_backend: "gemini"`.
 
+> **One server or two?** By default the text LLM and the vision model share one
+> Ollama server (`ollama_base_url`) — that works fine; Ollama loads each model on
+> demand. To run the VLM on a **separate Ollama server** (e.g. a second GPU or a
+> dedicated port), start another server and point `vlm_ollama_base_url` at it:
+> ```jsonc
+> "ollama_base_url":     "http://localhost:11434",   // text LLM
+> "vlm_ollama_base_url": "http://localhost:11435"     // vision VLM (separate server/GPU)
+> ```
+> Leave `vlm_ollama_base_url` empty to keep both on one server. Note: two servers
+> on the **same** GPU only split its VRAM — the split pays off across **different** GPUs.
+
 Verify the server is running:
 
 ```bash
@@ -875,6 +886,7 @@ unchanged; tasks differ only by `task_type`, `images`, `instruction`, `output`.
 | ---------------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------- |
 | `vlm_output_backend`       | `template`                     | `"ollama"` = Ollama vision model, `"gemini"` = Gemini multimodal, `"template"` = no model (see backends below) |
 | `vlm_ollama_model`         | `qwen2.5vl:7b`                 | Ollama vision model tag (`ollama pull` it first; use a multi-image model for comparison tasks)  |
+| `vlm_ollama_base_url`      | `""` (→ `ollama_base_url`)     | Ollama endpoint for the vision model. Empty = share the text-LLM server; set a host/port to run VLM on a **separate Ollama server** (e.g. a second GPU) |
 | `vlm_output_temperature`   | `0.2`                          | Sampling temperature for the VLM output call                                                     |
 | `vlm_output_timeout`       | `180`                          | Seconds per VLM call                                                                             |
 | `vlm_context_max_elements` | `10`                           | How many BIM elements are passed to the VLM as grounding text (not stored in the sample)         |
@@ -1010,6 +1022,12 @@ IFC mesh ─┬─► z-buffer ─► colour render ─────────�
 ---
 
 ## Revision History
+
+### v0.4.2 — Separate Ollama server for VLM
+
+- New `vlm_ollama_base_url`: point the vision model at its own Ollama server
+  (separate port / second GPU). Empty (default) shares `ollama_base_url`, so
+  existing single-server setups are unchanged.
 
 ### v0.4.1 — Consistent VLM output backends
 
