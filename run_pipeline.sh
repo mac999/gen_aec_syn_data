@@ -25,7 +25,7 @@ read_cfg() { "$PY" -c "import json,sys;print(json.load(open('config.json')).get(
 LLM_BACKEND="$(read_cfg llm_backend ollama)"
 VLM_BACKEND="$(read_cfg vlm_output_backend template)"
 LLM_MODEL="$(read_cfg ollama_model qwen3:30b-a3b)"
-VLM_MODEL="$(read_cfg vlm_ollama_model qwen2.5vl:7b)"
+VLM_MODEL="$(read_cfg vlm_ollama_model qwen3-vl:30b)"
 
 # --- 1. Ollama (only needed when a backend is set to "ollama") -----------------
 if [ "$LLM_BACKEND" = "ollama" ] || [ "$VLM_BACKEND" = "ollama" ]; then
