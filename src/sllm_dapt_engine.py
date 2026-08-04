@@ -67,10 +67,12 @@ def infer_doc_metadata(
         "model": config.ollama_model,
         "prompt": _DOC_META_PROMPT.format(head=head),
         "stream": False,
-        # Deliberately no "format": "json" — on a reasoning model the grammar
-        # applies to the answer channel while the tokens go to the thinking
-        # channel, and the reply comes back empty. The prompt asks for JSON and
-        # the object is recovered below.
+        # think:false shuts the reasoning channel; without it qwen3 spends the
+        # whole num_predict budget there and returns an empty answer. With the
+        # channel shut it reasons in plain prose instead and still never
+        # reaches the JSON, so the grammar is what actually forces an object.
+        "think": False,
+        "format": "json",
         "options": {
             "temperature": 0.0,
             "num_ctx": config.ollama_num_ctx,
