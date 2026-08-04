@@ -428,6 +428,18 @@ class SLLM_SFT_Engine:
             inp_meta = inp.get("metadata", {})
             out = data.get("output", {})
 
+            # A record with no question or no answer is not a training example.
+            # The model occasionally emits one inside an otherwise valid
+            # qa_pairs array, and it was being written out with answer="".
+            if not str(data.get("instruction", "")).strip():
+                logger.warning("Dropping sample with empty instruction "
+                               "(chunk %d of '%s')", chunk.chunk_index, chunk.doc_id)
+                return None
+            if not str(out.get("answer", "")).strip():
+                logger.warning("Dropping sample with empty answer "
+                               "(chunk %d of '%s')", chunk.chunk_index, chunk.doc_id)
+                return None
+
             # Negative samples are unanswerable by construction: stamp the label
             # and drop any grounding the model may have hallucinated, so the
             # training signal ("no evidence → decline") stays clean regardless
