@@ -3,7 +3,7 @@ import json
 import logging
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 logger = logging.getLogger("AEC_Pipeline.config")
 
@@ -374,14 +374,35 @@ class PipelineConfig:
     def site_photo_dir(self) -> Path:
         return self.vlm_output_dir / "images" / "site_photo"
 
-    def file_output_dir(self, stem: str, kind: str) -> Path:
+    def file_output_dir(self, stem: str, kind: str,
+                        subdir: Optional[Path] = None) -> Path:
         """
         Per-input-file output directory, e.g. ``output/<stem>_sft/``.
 
         *stem* is the input file name without extension; *kind* is one of
         ``"sft"``, ``"dapt"``, or ``"vlm"``.
+
+        *subdir* mirrors the input tree: a corpus organised as
+        ``input/03_safety/rule.pdf`` writes to ``output/03_safety/rule_sft/``
+        rather than flattening every category into one directory. Input
+        discovery is recursive, so without this a few hundred folders collapse
+        into a single listing and the category a file came from is lost.
         """
-        return self.output_dir / f"{stem}_{kind}"
+        base = self.output_dir if subdir is None else self.output_dir / subdir
+        return base / f"{stem}_{kind}"
+
+    def relative_subdir(self, path: Path) -> Optional[Path]:
+        """
+        Where *path* sits inside ``input_dir``, or None when it is elsewhere.
+
+        Explicit ``--pdf``/``--ifc`` arguments may point outside the input
+        tree; those keep the flat layout.
+        """
+        try:
+            relative = path.resolve().parent.relative_to(self.input_dir.resolve())
+        except (ValueError, OSError):
+            return None
+        return None if relative == Path(".") else relative
 
     def ensure_output_dirs(self) -> None:
         """Create the output root. Per-file sub-directories are made on demand."""
