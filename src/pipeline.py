@@ -121,10 +121,12 @@ class AECPipeline:
         )
 
         stem = pdf_path.stem
+        subdir = self.config.relative_subdir(pdf_path)
         count = 0
         if mode in ("sft", "both"):
             try:
-                self.sllm_sft_engine.set_output_dir(self.config.file_output_dir(stem, "sft"))
+                self.sllm_sft_engine.set_output_dir(
+                    self.config.file_output_dir(stem, "sft", subdir))
                 count += self.sllm_sft_engine.process_chunks(chunks)
                 logger.info("[PDF] SFT → %s", self.sllm_sft_engine.jsonl_path)
             except Exception as exc:
@@ -132,7 +134,8 @@ class AECPipeline:
 
         if mode in ("dapt", "both"):
             try:
-                self.sllm_dapt_engine.set_output_dir(self.config.file_output_dir(stem, "dapt"))
+                self.sllm_dapt_engine.set_output_dir(
+                    self.config.file_output_dir(stem, "dapt", subdir))
                 doc_meta = {"source_name": pdf_path.name}
                 # A year in the file name (e.g. "…매뉴얼(2024).pdf") is more
                 # reliable than what the model infers from the opening pages,
@@ -154,8 +157,10 @@ class AECPipeline:
     def _process_ifc(self, ifc_path: Path) -> int:
         logger.info("[IFC] Processing: %s", ifc_path.name)
 
-        # Per-file output: output/<stem>_vlm/{images/..., vlm_training_data.jsonl}
-        vlm_dir = self.config.file_output_dir(ifc_path.stem, "vlm")
+        # Per-file output: output/<stem>_vlm/{images/..., vlm_training_data.jsonl},
+        # under the model's own folder when it came from inside input_dir.
+        vlm_dir = self.config.file_output_dir(
+            ifc_path.stem, "vlm", self.config.relative_subdir(ifc_path))
         self.vlm_engine.set_output_dir(vlm_dir)
 
         try:
