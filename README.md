@@ -183,21 +183,37 @@ that generates each VLM sample's `output` (answer/label/evidence). Pull it once 
 the pipeline does **not** pull it or start the server for you:
 
 ```bash
-ollama pull qwen2.5vl:7b        # must match vlm_ollama_model in config.json
+ollama pull qwen3-vl:30b        # must match vlm_ollama_model in config.json
 ```
 
-| Model (Ollama tag)      | VRAM (Q4) | Multi-image¹ | Korean | Notes                             |
-| ----------------------- | --------- | ------------ | ------ | --------------------------------- |
-| `qwen2.5vl:3b`        | ~3 GB     | ✓            | ★★★  | lightest; 8 GB VRAM class         |
-| **`qwen2.5vl:7b`**    | ~6 GB     | ✓            | ★★★★ | **default — good balance**        |
-| `qwen2.5vl:32b`       | ~21 GB    | ✓            | ★★★★★| higher quality; needs 24 GB+      |
-| `qwen2.5vl:72b`       | ~48 GB    | ✓            | ★★★★★| best; large-VRAM / unified memory |
-| `llama3.2-vision:11b` | ~8 GB     | ~ (weak)     | ★★★  | single-image tasks only           |
+**Qwen3-VL** (2025–26 generation, stronger than Qwen2.5-VL) — recommended:
+
+| Model (Ollama tag)   | Size  | Arch          | Multi-image¹ | Korean | Notes                                         |
+| -------------------- | ----- | ------------- | ------------ | ------ | --------------------------------------------- |
+| `qwen3-vl:4b`      | ~3 GB | dense         | ✓            | ★★★  | light; 8 GB VRAM class                        |
+| `qwen3-vl:8b`      | ~6 GB | dense         | ✓            | ★★★★ | good on 8–12 GB VRAM                          |
+| **`qwen3-vl:30b`** | ~20 GB| **MoE 30B-A3B** | ✓          | ★★★★★| **default — best value.** MoE ⇒ ~3B active/token, so it stays fast on **bandwidth-bound** unified-memory hosts (DGX Spark). Pairs with the text model `qwen3:30b-a3b`. |
+| `qwen3-vl:32b`     | ~21 GB| dense         | ✓            | ★★★★★| max quality; reads all weights ⇒ slower       |
 
 ¹ *Multi-image matters for the `bim_site_comparison` task (BIM + site in one
-prompt); Qwen2.5-VL handles multiple images well, Llama-3.2-Vision does not.*
+prompt); Qwen3-VL handles multiple images well.*
 
-Model pages / downloads: [Qwen2.5-VL](https://ollama.com/library/qwen2.5vl)
+> **Why MoE on DGX Spark?** GB10 has 128 GB unified memory but ~273 GB/s
+> bandwidth, so decode speed tracks the *active* parameter count. `qwen3-vl:30b`
+> gives 30B-class quality at ~3B-active speed. The dense `:32b` fits too but is
+> slower; `qwen3-vl:235b` (~143 GB) does **not** fit 128 GB. Smaller GPUs: use
+> `:8b` or the older `qwen2.5vl:7b`.
+>
+> **Does it all fit?** Yes — the whole stack shares the 128 GB pool: text LLM
+> `qwen3:30b-a3b` (~18 GB) + vision `qwen3-vl:30b` (~20 GB) + the ComfyUI SD-1.5
+> checkpoint/ControlNet (~4 GB) + KV cache/activations (~5–10 GB) ≈ **45–50 GB
+> peak**, leaving ~80 GB free. The sLLM and VLM branches also run **sequentially**,
+> so the real peak is lower. Capacity is never the limit here — only bandwidth
+> (speed). To avoid model reloads across runs: `OLLAMA_KEEP_ALIVE=-1` and
+> `OLLAMA_MAX_LOADED_MODELS=2`.
+
+Model pages / downloads: [Qwen3-VL](https://ollama.com/library/qwen3-vl)
+· [Qwen2.5-VL](https://ollama.com/library/qwen2.5vl)
 · [Llama-3.2-Vision](https://ollama.com/library/llama3.2-vision)
 · [Qwen2.5-VL on HuggingFace](https://huggingface.co/collections/Qwen/qwen25-vl-6795ffac22b334a837c0f9a5).
 Prefer a cloud model, or no local GPU for vision? The **Gemini** backend
@@ -530,8 +546,9 @@ Notes:
 
 - Models are read from `config.json` (`ollama_model`, `vlm_ollama_model`) so the
   script never drifts; it pulls a model only when that backend is set to
-  `ollama`. The default VLM model is **`qwen2.5vl:7b`** — a good VRAM/quality
-  balance (~6 GB, multi-image, solid Korean).
+  `ollama`. The default VLM model is **`qwen3-vl:30b`** (MoE 30B-A3B, ~20 GB) —
+  30B-class quality that stays fast on bandwidth-bound unified-memory hosts;
+  use `qwen3-vl:8b` or `qwen2.5vl:7b` on smaller GPUs.
 - ComfyUI is **not** auto-started (it has its own models/setup, [§4](#4-comfyui-image-synthesis)).
   If it is unreachable the script warns and site-photo synthesis falls back to
   copying the BIM render; everything else still runs.
@@ -916,7 +933,7 @@ unchanged; tasks differ only by `task_type`, `images`, `instruction`, `output`.
 | Parameter                    | Default                          | Description                                                                                     |
 | ---------------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------- |
 | `vlm_output_backend`       | `template`                     | `"ollama"` = Ollama vision model, `"gemini"` = Gemini multimodal, `"template"` = no model (see backends below) |
-| `vlm_ollama_model`         | `qwen2.5vl:7b`                 | Ollama vision model tag (`ollama pull` it first; use a multi-image model for comparison tasks)  |
+| `vlm_ollama_model`         | `qwen3-vl:30b`                 | Ollama vision model tag (`ollama pull` it first; use a multi-image model for comparison tasks)  |
 | `vlm_ollama_base_url`      | `""` (→ `ollama_base_url`)     | Ollama endpoint for the vision model. Empty = share the text-LLM server; set a host/port to run VLM on a **separate Ollama server** (e.g. a second GPU) |
 | `vlm_output_temperature`   | `0.2`                          | Sampling temperature for the VLM output call                                                     |
 | `vlm_output_timeout`       | `180`                          | Seconds per VLM call                                                                             |
@@ -940,7 +957,7 @@ task; omit `labels` to fall back to the match/mismatch set.
 ```jsonc
 // config.json — add or edit tasks freely
 "vlm_output_backend": "vlm",
-"vlm_ollama_model": "qwen2.5vl:7b",
+"vlm_ollama_model": "qwen3-vl:30b",
 "vlm_tasks": [
   { "task_type": "material_identification", "images": ["site"],
     "instruction": "현장 사진에 나타난 주요 구조 재료와 공법을 식별하라 …",
@@ -977,7 +994,7 @@ A generated `material_identification` sample (schema unchanged; only content var
 
 | `vlm_output_backend` | runs on                          | setup                                                             |
 | -------------------- | -------------------------------- | ---------------------------------------------------------------- |
-| `ollama`           | local Ollama vision model        | [Prerequisites §1](#1-ollama-local-llm) — `ollama pull qwen2.5vl:7b` |
+| `ollama`           | local Ollama vision model        | [Prerequisites §1](#1-ollama-local-llm) — `ollama pull qwen3-vl:30b` |
 | `gemini`           | Gemini multimodal API            | [Prerequisites §3](#3-google-gemini-api-optional-cloud-backend) — set the key |
 | `template`         | none (honest-empty placeholder)  | —                                                                |
 
@@ -987,7 +1004,7 @@ The pipeline does **not** start Ollama or pull the model for you — bring the
 chosen backend up first (see the linked prerequisites), then run:
 
 ```bash
-ollama serve && ollama pull qwen2.5vl:7b      # for vlm_output_backend: "ollama"
+ollama serve && ollama pull qwen3-vl:30b      # for vlm_output_backend: "ollama"
 python main.py --ifc input/Duplex_A_20110907.ifc
 ```
 
@@ -1053,6 +1070,15 @@ IFC mesh ─┬─► z-buffer ─► colour render ─────────�
 ---
 
 ## Revision History
+
+### v0.4.4 — Default VLM model → `qwen3-vl:30b` (DGX Spark)
+
+- Default `vlm_ollama_model` upgraded from `qwen2.5vl:7b` to **`qwen3-vl:30b`**
+  (MoE 30B-A3B, ~20 GB): 30B-class quality that stays fast on bandwidth-bound
+  unified-memory hosts (GB10 / DGX Spark), pairing with the text `qwen3:30b-a3b`.
+- README: Qwen3-VL model table, and a memory-budget note confirming the full
+  stack (text + vision + ComfyUI) fits the 128 GB pool (~45–50 GB peak; sLLM/VLM
+  run sequentially). Smaller GPUs can still set `qwen3-vl:8b` / `qwen2.5vl:7b`.
 
 ### v0.4.3 — One-command launchers
 

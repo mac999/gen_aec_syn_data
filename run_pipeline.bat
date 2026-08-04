@@ -22,7 +22,7 @@ REM Read model names / backends from config.json (kept in sync, no drift).
 for /f "usebackq delims=" %%A in (`python -c "import json;print(json.load(open('config.json')).get('llm_backend','ollama'))"`) do set "LLM_BACKEND=%%A"
 for /f "usebackq delims=" %%A in (`python -c "import json;print(json.load(open('config.json')).get('vlm_output_backend','template'))"`) do set "VLM_BACKEND=%%A"
 for /f "usebackq delims=" %%A in (`python -c "import json;print(json.load(open('config.json')).get('ollama_model','qwen3:30b-a3b'))"`) do set "LLM_MODEL=%%A"
-for /f "usebackq delims=" %%A in (`python -c "import json;print(json.load(open('config.json')).get('vlm_ollama_model','qwen2.5vl:7b'))"`) do set "VLM_MODEL=%%A"
+for /f "usebackq delims=" %%A in (`python -c "import json;print(json.load(open('config.json')).get('vlm_ollama_model','qwen3-vl:30b'))"`) do set "VLM_MODEL=%%A"
 for /f "usebackq delims=" %%A in (`python -c "import json;print(json.load(open('config.json')).get('comfyui_url','http://127.0.0.1:8188'))"`) do set "COMFY_URL=%%A"
 
 REM --- 1. Ollama (only when a backend is set to "ollama") ---------------------
