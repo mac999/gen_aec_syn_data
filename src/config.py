@@ -377,19 +377,24 @@ class PipelineConfig:
     def file_output_dir(self, stem: str, kind: str,
                         subdir: Optional[Path] = None) -> Path:
         """
-        Per-input-file output directory, e.g. ``output/<stem>_sft/``.
+        Per-input-file output directory, e.g. ``output/<stem>/``.
 
-        *stem* is the input file name without extension; *kind* is one of
-        ``"sft"``, ``"dapt"``, or ``"vlm"``.
+        *stem* is the input file name without extension. Every dataset derived
+        from one input shares this directory: the three writers already use
+        distinct file names (``sllm_training_data.jsonl``,
+        ``dapt_training_data.jsonl``, ``vlm_training_data.jsonl``), so the old
+        ``_sft`` / ``_dapt`` / ``_vlm`` suffix doubled the directory count
+        without preventing any collision. *kind* is kept for call-site
+        readability and no longer affects the path.
 
         *subdir* mirrors the input tree: a corpus organised as
-        ``input/03_safety/rule.pdf`` writes to ``output/03_safety/rule_sft/``
+        ``input/03_safety/rule.pdf`` writes to ``output/03_safety/rule/``
         rather than flattening every category into one directory. Input
         discovery is recursive, so without this a few hundred folders collapse
         into a single listing and the category a file came from is lost.
         """
         base = self.output_dir if subdir is None else self.output_dir / subdir
-        return base / f"{stem}_{kind}"
+        return base / stem
 
     def relative_subdir(self, path: Path) -> Optional[Path]:
         """
