@@ -316,10 +316,15 @@ class SLLM_SFT_Engine:
 
             try:
                 from langchain_ollama import OllamaLLM as _Ollama  # noqa: PLC0415
+                # reasoning=False maps to Ollama's "think": false. On qwen3 the
+                # thinking channel otherwise consumes the whole num_predict
+                # budget and the answer channel comes back empty — measured on
+                # this prompt: 2048 tokens spent, 0 characters returned.
                 llm = _Ollama(
                     model=self.config.ollama_model,
                     base_url=self.config.ollama_base_url,
                     temperature=self.config.ollama_temperature,
+                    reasoning=False,
                     **opts,
                 )
             except (ImportError, TypeError):
