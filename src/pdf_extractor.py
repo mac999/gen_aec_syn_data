@@ -106,6 +106,12 @@ class PDFExtractor:
                 if text.strip():
                     raw_pages.append((page_num, text))
 
+        if not raw_pages and self.config.ocr_enabled:
+            # Scanned PDF: no text layer at all. Rasterise and read the pages.
+            # This runs only when the normal path found nothing, so the cost
+            # falls on scanned files alone.
+            raw_pages = self._ocr_pages(pdf_path)
+
         if not raw_pages:
             logger.warning("No text extracted from %s", pdf_path.name)
             return []
@@ -125,6 +131,69 @@ class PDFExtractor:
 
         logger.info("Created %d chunks from '%s'", len(kept), pdf_path.name)
         return kept
+
+    def _ocr_pages(self, pdf_path: Path) -> List[tuple[int, str]]:
+        """
+        Read a scanned PDF with EasyOCR and return (page_number, text) pairs.
+
+        The output is shaped exactly like the normal extraction path, so
+        chunking, filtering and both sLLM engines are unchanged — OCR only
+        supplies the text that PyMuPDF could not.
+
+        The reader is built once per process: EasyOCR loads detection and
+        recognition models on first use, which is far more expensive than the
+        pages themselves.
+        """
+        import fitz  # noqa: PLC0415
+
+        try:
+            reader = self._get_ocr_reader()
+        except Exception as exc:
+            logger.error("OCR unavailable for '%s': %s", pdf_path.name, exc)
+            return []
+
+        pages: List[tuple[int, str]] = []
+        zoom = self.config.ocr_dpi / 72.0
+        matrix = fitz.Matrix(zoom, zoom)
+        with fitz.open(str(pdf_path)) as doc:
+            total = doc.page_count
+            limit = min(self.config.ocr_max_pages or total, total)
+            if total > limit:
+                logger.warning(
+                    "OCR limited to the first %d of %d pages in '%s' "
+                    "(ocr_max_pages)", limit, total, pdf_path.name,
+                )
+            logger.info("OCR: reading %d page(s) of '%s' at %d dpi",
+                        limit, pdf_path.name, self.config.ocr_dpi)
+            for page_num, page in enumerate(doc, start=1):
+                if page_num > limit:
+                    break
+                try:
+                    png = page.get_pixmap(matrix=matrix).tobytes("png")
+                    lines = reader.readtext(png, detail=0, paragraph=True)
+                except Exception as exc:
+                    logger.warning("OCR failed on page %d of '%s': %s",
+                                   page_num, pdf_path.name, exc)
+                    continue
+                text = normalise_pdf_text("\n".join(lines))
+                if text.strip():
+                    pages.append((page_num, text))
+
+        logger.info("OCR: recovered text from %d/%d page(s) of '%s'",
+                    len(pages), limit, pdf_path.name)
+        return pages
+
+    def _get_ocr_reader(self):
+        """Lazily build and cache the EasyOCR reader."""
+        reader = getattr(self, "_ocr_reader", None)
+        if reader is None:
+            import easyocr  # noqa: PLC0415
+            langs = [l.strip() for l in self.config.ocr_languages.split(",") if l.strip()]
+            logger.info("Initialising EasyOCR (languages=%s, gpu=%s)",
+                        langs, self.config.ocr_use_gpu)
+            reader = easyocr.Reader(langs, gpu=self.config.ocr_use_gpu, verbose=False)
+            self._ocr_reader = reader
+        return reader
 
     @staticmethod
     def _join_pages(

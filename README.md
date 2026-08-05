@@ -77,6 +77,7 @@ All settings have defaults in **`config.json`**, overridable per run by CLI flag
 | Feature                      | Detail                                                                                        |
 | ---------------------------- | --------------------------------------------------------------------------------------------- |
 | **PDF Extraction**     | PyMuPDF paragraph-aware chunking + text normalisation (vertical-type folding, TOC/page-furniture removal) |
+| **OCR Fallback**       | Scanned PDFs (no text layer) are rasterised and read with EasyOCR, then follow the normal chunking path — fires only when text extraction finds nothing |
 | **SFT / DAPT Modes**   | `--dataset sft\|dapt\|both` — QA pairs (LLM) and/or raw domain corpus                        |
 | **sLLM Synthesis**     | Ollama, llama-server, or Gemini backend — multi-QA per chunk, explicit context/output limits  |
 | **Multi-QA per Chunk** | Single LLM call generates N QA pairs from one chunk (`--qa-per-chunk N`)                    |
@@ -436,6 +437,34 @@ curl http://127.0.0.1:8188/system_stats
 > **Note:** ComfyUI is optional. If it is not reachable, the pipeline falls back to using the BIM render directly as the site-photo placeholder so that structurally valid VLM JSONL records are still produced.
 
 ---
+
+### 4b. EasyOCR (scanned PDFs)
+
+Installed with `requirements.txt`; no separate setup. Detection and recognition
+models download on first use.
+
+A PDF with no text layer would otherwise be skipped entirely — no DAPT corpus,
+no SFT pairs. `PDFExtractor.extract_chunks()` falls back to rasterising the
+pages with PyMuPDF and reading them with EasyOCR, returning the same
+`(page, text)` shape as the normal path, so chunking and both sLLM engines are
+unchanged.
+
+The fallback fires **only** when text extraction finds nothing, so a corpus of
+digital PDFs pays nothing for it.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `ocr_enabled` | `true` | Turn the fallback off entirely |
+| `ocr_languages` | `"ko,en"` | Comma-separated EasyOCR codes |
+| `ocr_dpi` | `200` | Reads 10 pt print reliably; 300 is slower |
+| `ocr_use_gpu` | `true` | Falls back cleanly when VRAM is unavailable |
+| `ocr_max_pages` | `0` | 0 = no limit |
+
+Measured on an NVIDIA GB10: **2.5 s/page on GPU, 46 s/page on CPU**. Give OCR
+the GPU when it is free — unload the LLM first if a local model is resident.
+
+> OCR output carries recognition errors, especially on maps and figures. Review
+> before treating OCR-derived records as equivalent to text-layer ones.
 
 ### 5. Python Environment
 
