@@ -22,3 +22,4 @@ tqdm>=4.65.0
 
 # Environment / secrets
 python-dotenv>=1.0.0
+easyocr>=1.7.0
