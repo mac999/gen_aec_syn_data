@@ -221,15 +221,17 @@ class PDFExtractor:
                 if page_num not in buffer_pages:
                     buffer_pages.append(page_num)
 
-        # Emit the remaining buffer
-        if len(buffer) >= min_size:
-            yield self._make_chunk(doc_id, chunk_index, buffer, buffer_pages)
-        elif buffer and chunk_index > 0:
-            # Too short to stand alone — merge with previous isn't possible here,
-            # so we emit it anyway since it still contains valid content.
-            logger.debug(
-                "Emitting short trailing chunk (%d chars)", len(buffer)
-            )
+        # Emit the remaining buffer. A short tail is kept rather than dropped:
+        # is_informative() downstream is the quality gate (>=40 chars, >=20
+        # Hangul, >=50% alphanumeric), and it rejects the page furniture this
+        # used to guard against. Requiring chunk_index > 0 silently discarded
+        # every document whose whole body fits in one under-min_size buffer —
+        # short notices, fee schedules, amendment rationales. On a 1,963-file
+        # corpus that was 633 documents, 32% of it, producing no records at all.
+        if buffer:
+            if len(buffer) < min_size:
+                logger.debug("Emitting short chunk (%d chars < min %d)",
+                             len(buffer), min_size)
             yield self._make_chunk(doc_id, chunk_index, buffer, buffer_pages)
 
     @staticmethod
