@@ -20,6 +20,11 @@
   "chunk_min_size": 500,
   "chunk_max_size": 700,
   "chunk_overlap": 200,
+  "ocr_enabled": true,
+  "ocr_languages": "ko,en",
+  "ocr_dpi": 200,
+  "ocr_use_gpu": true,
+  "ocr_max_pages": 0,
   "ifc_render_width": 1024,
   "ifc_render_height": 1024,
   "ifc_views": [
