@@ -138,10 +138,20 @@ class PipelineConfig:
     # llama-server
     llama_server_url: str = "http://localhost:8080"
 
-    # Chunking 
+    # Chunking
     chunk_min_size: int = 100
     chunk_max_size: int = 300
     chunk_overlap: int = 100
+
+    # OCR fallback — used only for PDFs with no text layer at all, so scanned
+    # documents still reach the SFT/DAPT engines instead of being skipped.
+    # Pages are rasterised with PyMuPDF and read with EasyOCR; the result is
+    # handed to the normal chunking path unchanged.
+    ocr_enabled: bool = True
+    ocr_languages: str = "ko,en"     # comma-separated EasyOCR codes
+    ocr_dpi: int = 200               # 200 reads 10pt print reliably; 300 is slower
+    ocr_use_gpu: bool = True
+    ocr_max_pages: int = 0           # 0 = no limit
 
     # IFC rendering 
     ifc_render_width: int = 1024
