@@ -20,6 +20,7 @@
   "chunk_min_size": 500,
   "chunk_max_size": 700,
   "chunk_overlap": 200,
+  "space_gap_ratio": 0.2,
   "ocr_enabled": true,
   "ocr_languages": "ko,en",
   "ocr_dpi": 200,
