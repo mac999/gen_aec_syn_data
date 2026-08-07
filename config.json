@@ -51,7 +51,7 @@
       0
     ]
   },
-  "ifc_max_elements": 500,
+  "ifc_max_elements": 1000,
   "ifc_min_elements_per_group": 5,
   "comfyui_url": "http://127.0.0.1:8188",
   "comfyui_timeout": 300,
