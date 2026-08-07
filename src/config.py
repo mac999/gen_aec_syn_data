@@ -143,6 +143,13 @@ class PipelineConfig:
     chunk_max_size: int = 300
     chunk_overlap: int = 100
 
+    # Word spacing reconstruction. HWP-generated PDFs position every glyph
+    # individually and write no space characters, so extracted text arrives as
+    # one run-on string. A gap wider than this fraction of the median glyph
+    # width is treated as a word break. 0 disables the reconstruction and falls
+    # back to plain text extraction.
+    space_gap_ratio: float = 0.20
+
     # OCR fallback — used only for PDFs with no text layer at all, so scanned
     # documents still reach the SFT/DAPT engines instead of being skipped.
     # Pages are rasterised with PyMuPDF and read with EasyOCR; the result is
