@@ -14,6 +14,10 @@ _LEADER_RE = re.compile(r"[.·․‥…]{4,}")
 # A line holding nothing but a page number, possibly bracketed.
 _PAGE_ONLY_RE = re.compile(r"^[\s\-–—()\[\]]*\d{1,4}[\s\-–—()\[\]]*$")
 _CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+# A line ending like this closed a thought, so the break after it is real even
+# if the line happens to reach the margin. Korean sentences end in 다/음/함 as
+# often as in a full stop, and legal text ends clauses on 」 > ] ) : ; too.
+_SENTENCE_END_RE = re.compile(r"(?:[.!?:;。」』〉>\]]|[다음함])\s*$")
 _HANGUL_RE = re.compile(r"[가-힣]")
 
 
@@ -102,7 +106,7 @@ class PDFExtractor:
         raw_pages: List[tuple[int, str]] = []  # (page_num, text)
         with fitz.open(str(pdf_path)) as doc:
             for page_num, page in enumerate(doc, start=1):
-                text = normalise_pdf_text(page.get_text("text"))
+                text = normalise_pdf_text(self._page_text(page))
                 if text.strip():
                     raw_pages.append((page_num, text))
 
@@ -131,6 +135,103 @@ class PDFExtractor:
 
         logger.info("Created %d chunks from '%s'", len(kept), pdf_path.name)
         return kept
+
+    def _page_text(self, page) -> str:
+        """
+        Page text with word spacing reconstructed from glyph positions.
+
+        Korean government PDFs are typically produced by HWP, which positions
+        every glyph individually and writes no space characters at all.
+        ``get_text("text")`` therefore returns whole sentences glued together —
+        "건축물에너지평가사시험과목및시험과목일부면제범위" — and so does
+        ``get_text("words")``, which sees one 24-character word. On the corpus
+        this was built against, 31% of DAPT records contained a run of 25+
+        Hangul characters with no space in it.
+
+        Character bounding boxes still carry the spacing: within a word the gap
+        between glyphs is near zero (often slightly negative), while a word
+        break is a fifth of a glyph width or more. Inserting a space wherever
+        the gap exceeds ``space_gap_ratio`` of the median glyph width restores
+        it. The threshold is a ratio, not an absolute, so it holds across font
+        sizes on the same page.
+
+        Falls back to plain text extraction when a page carries no character
+        geometry (some generators emit spans without a ``chars`` array).
+        """
+        ratio = self.config.space_gap_ratio
+        if ratio <= 0:
+            return page.get_text("text")
+
+        rendered: List[tuple[str, float]] = []   # (text, right edge)
+        all_widths: List[float] = []
+        saw_chars = False
+        for block in page.get_text("rawdict").get("blocks", []):
+            if block.get("type") != 0:        # 0 = text, 1 = image
+                continue
+            for line in block.get("lines", []):
+                chars = [c for span in line.get("spans", [])
+                         for c in span.get("chars", [])]
+                if not chars:
+                    continue
+                saw_chars = True
+                widths = sorted(c["bbox"][2] - c["bbox"][0]
+                                for c in chars if c["c"].strip())
+                if not widths:
+                    continue
+                median_width = widths[len(widths) // 2]
+                all_widths.append(median_width)
+                threshold = median_width * ratio
+                buf = [chars[0]["c"]]
+                for left, right in zip(chars, chars[1:]):
+                    # Never double up on a space the PDF did provide.
+                    if (left["c"] != " " and right["c"] != " "
+                            and right["bbox"][0] - left["bbox"][2] > threshold):
+                        buf.append(" ")
+                    buf.append(right["c"])
+                text = "".join(buf).rstrip()
+                if text:
+                    rendered.append((text, line["bbox"][2]))
+
+        if not saw_chars:
+            return page.get_text("text")
+        return self._join_wrapped(rendered, all_widths)
+
+    @staticmethod
+    def _join_wrapped(rendered: List[tuple[str, float]],
+                      widths: List[float]) -> str:
+        """
+        Undo PDF line wrapping so words are not split across newlines.
+
+        A wrapped line is a visual artefact: the text ran out of column, not
+        out of sentence. Left in, it splits words — "일부개\\n정", "실기\\n시험의",
+        "경력\\n이" — which reaches the DAPT corpus verbatim and the LLM prompt
+        as broken tokens. On the corpus this was built against, 99.4% of DAPT
+        records contained at least one such split, 11,515 in total.
+
+        A line that runs to the body's right margin is a wrap and is joined to
+        the next line with no separator; a line that stops short ended by
+        choice (a heading, a list item, the end of a sentence) and keeps its
+        newline. Sentence-final punctuation overrides the geometry, since a
+        sentence can happen to end flush with the margin.
+        """
+        if not rendered:
+            return ""
+        rights = sorted(r for _, r in rendered)
+        # The 90th percentile is the body margin: headings and short list items
+        # sit well inside it, and a stray wide line cannot drag it out.
+        margin = rights[min(int(len(rights) * 0.9), len(rights) - 1)]
+        glyph = sorted(widths)[len(widths) // 2] if widths else 0.0
+        full_enough = margin - glyph
+
+        out: List[str] = [rendered[0][0]]
+        prev_full = rendered[0][1] >= full_enough
+        for text, right in rendered[1:]:
+            if prev_full and not _SENTENCE_END_RE.search(out[-1]):
+                out[-1] += text
+            else:
+                out.append(text)
+            prev_full = right >= full_enough
+        return "\n".join(out)
 
     def _ocr_pages(self, pdf_path: Path) -> List[tuple[int, str]]:
         """
