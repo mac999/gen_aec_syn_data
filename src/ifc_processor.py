@@ -463,8 +463,29 @@ class IFCProcessor:
             )
         logger.info("Rendering %d group(s)", len(list_group))
 
+        skipped_empty = 0
         for index, group in enumerate(list_group):
             all_tris = self._extract_geometry(ifc_file, group)
+
+            # No triangles means nothing to photograph. The render would be a
+            # flat background rectangle and no depth map is written, so the
+            # VLM stage falls back to conditioning ControlNet on that blank
+            # image — which constrains nothing, and Stable Diffusion invents a
+            # building from the prompt alone. The result is a training pair
+            # whose "site photo" has no relationship to the BIM model, and a
+            # VLM caption describing a building that was never in the file.
+            # Conformance and proxy-only IFC files hit this routinely.
+            # Count triangles, not entries: an element can come back with an
+            # empty (0, 3, 3) array, so a non-empty list still renders nothing.
+            triangle_count = sum(len(tris) for tris, _ in all_tris)
+            if triangle_count == 0:
+                skipped_empty += 1
+                logger.warning(
+                    "Group %d of '%s' has no renderable geometry — skipping "
+                    "(a render without geometry produces an unrelated photo)",
+                    index, model_id,
+                )
+                continue
 
             for view_name in self.config.ifc_views:
                 out_path = render_dir / f"{model_id}_{index}_{view_name}.png"
@@ -473,6 +494,17 @@ class IFCProcessor:
                     render_paths.append(out_path)
                     logger.info("Saved render: %s", out_path.name)
                 except Exception as exc:
+                    # The fallback draws a legend on the background colour. That
+                    # is useful when a view fails for a model that does have
+                    # geometry, but never when there is nothing to draw — it
+                    # yields a flat rectangle that ControlNet cannot condition
+                    # on, and the photo ends up unrelated to the model.
+                    if "No triangles" in str(exc):
+                        logger.warning(
+                            "View '%s' of group %d has no triangles — skipping "
+                            "rather than emitting a blank render", view_name, index,
+                        )
+                        continue
                     logger.warning(
                         "Render failed for view '%s': %s — using fallback", view_name, exc
                     )
@@ -488,6 +520,11 @@ class IFCProcessor:
                     self._write_depth_map(all_tris, view_name, depth_path)
                 )
 
+        if skipped_empty:
+            logger.info(
+                "Skipped %d of %d group(s) in '%s' for having no geometry",
+                skipped_empty, len(list_group), model_id,
+            )
         return render_paths, depth_paths
 
     def _write_depth_map(
