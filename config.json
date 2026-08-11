@@ -60,9 +60,9 @@
   "i2i_denoise": 1.0,
   "i2i_steps": 30,
   "i2i_cfg": 7.0,
-  "controlnet_strength": 0.8,
+  "controlnet_strength": 0.6,
   "controlnet_start_percent": 0.0,
-  "controlnet_end_percent": 0.75,
+  "controlnet_end_percent": 0.6,
   "vlm_control_hint": "depth",
   "vlm_photo_views": [
     "perspective"
@@ -76,8 +76,8 @@
   "vlm_sampler": "dpmpp_2m",
   "vlm_scheduler": "karras",
   "vlm_seed": -1,
-  "vlm_positive_prompt": "photograph of a {trade_type} building under construction on a {project_type} site, bare grey structural concrete frame, cool grey board-formed concrete walls and floor slabs, plywood formwork panels, a few steel props and scaffold towers, some starter rebar at slab edges, standing on dark brown compacted earth, damp churned soil with tyre ruts, patches of gravel and mud, construction dust and dirt, soft flat overcast daylight, natural muted colours, realistic photo, sharp focus, high detail, 35mm lens, architectural documentary photography",
-  "vlm_negative_prompt": "desert, sand dunes, beach, arid landscape, sandy ground, beige concrete, sand-coloured walls, concrete pavement, paved plaza, asphalt, smooth flat floor, polished slab, tiled floor, clean swept ground, lawn, grass, wire mesh, chain link fence, dense grid, lattice, net, cage, repeating pattern, wall of rebar, forest of steel bars, clouds, dramatic sky, sunset, sunbeam, lens flare, ruins, rubble, demolition, collapsed structure, derelict, abandoned building, war damage, crumbling cracked concrete, 3d render, cgi, rendering, wireframe, blueprint, cad drawing, diagram, illustration, drawing, painting, cartoon, anime, sketch, smooth plastic surface, glossy, chrome, metallic sheen, mirror, people, workers, animals, vehicles, text, watermark, logo, signature, floating objects, surreal, fantasy, distorted geometry, low quality, blurry, jpeg artifacts, oversaturated, neon colours",
+  "vlm_positive_prompt": "photograph of a {trade_type} building nearing completion on a {project_type} site, glazed windows in every opening with visible frames and mullions and reflections, hinged entrance doors set in their frames, precast concrete facade panels, standing on damp brown earth and grey gravel, patches of bare soil and mud with tyre ruts, a few small trees and rough patches of green grass around the plot, site fencing and stacked building materials nearby, low buildings and trees on the horizon, grey overcast sky with low cloud cover, soft diffuse daylight, natural colours, realistic photo, sharp focus, high detail, 35mm lens, architectural documentary photography",
+  "vlm_negative_prompt": "snow, snowy ground, winter, frost, ice, white ground, overexposed, blown highlights, high key, washed out, desert, sand dunes, beach, arid landscape, sandy ground, beige concrete, sand-coloured walls, concrete pavement, paved plaza, asphalt, smooth flat floor, polished slab, tiled floor, clean swept ground, wire mesh, chain link fence, dense grid, lattice, net, cage, repeating pattern, wall of rebar, forest of steel bars, sunset, sunbeam, lens flare, ruins, rubble, demolition, collapsed structure, derelict, abandoned building, war damage, crumbling cracked concrete, 3d render, cgi, rendering, wireframe, blueprint, cad drawing, diagram, illustration, drawing, painting, cartoon, anime, sketch, smooth plastic surface, glossy, chrome, metallic sheen, mirror, people, workers, animals, vehicles, text, watermark, logo, signature, floating objects, surreal, fantasy, distorted geometry, low quality, blurry, jpeg artifacts, oversaturated, neon colours",
   "vlm_trade_prompts": {
     "철근콘크리트": "cast-in-place reinforced concrete, rebar cages, tie wire, concrete cold joints",
     "강구조": "structural steel frame, bolted connections, primer-coated steel beams",
