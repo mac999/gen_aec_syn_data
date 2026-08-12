@@ -52,8 +52,11 @@ class AECPipeline:
 
         Parameters
         ----------
-        pdf_files : explicit list of PDF paths (falls back to scanning input/)
-        ifc_files : explicit list of IFC paths (falls back to scanning input/)
+        pdf_files : explicit list of PDF paths
+        ifc_files : explicit list of IFC paths
+
+        With neither given, input/ is scanned for both. Give either one and only
+        the named files are processed.
         """
         logger.info("=" * 60)
         logger.info("AEC Synthetic Dataset Generation Pipeline — START")
@@ -61,9 +64,12 @@ class AECPipeline:
 
         self.config.ensure_output_dirs()
 
-        # Discover input files
-        pdfs = pdf_files or self._discover(self.config.input_dir, ".pdf")
-        ifcs = ifc_files or self._discover(self.config.input_dir, ".ifc")
+        # Discover input files. Naming files on either flag means the run is
+        # meant for those files only — scanning input/ for the other type as
+        # well turns "--ifc model.ifc" into a run over every PDF sitting there.
+        explicit = pdf_files is not None or ifc_files is not None
+        pdfs = pdf_files or ([] if explicit else self._discover(self.config.input_dir, ".pdf"))
+        ifcs = ifc_files or ([] if explicit else self._discover(self.config.input_dir, ".ifc"))
 
         logger.info("Found %d PDF(s) and %d IFC file(s) in %s",
                     len(pdfs), len(ifcs), self.config.input_dir)
