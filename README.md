@@ -616,6 +616,22 @@ python main.py --ifc input/bridge.ifc
 python main.py --dry-run
 ```
 
+### Process only new files (skip inputs that already have outputs)
+
+```bash
+python main.py --only-new --input-dir /data/corpus --output-dir /data/train
+```
+
+The dataset writers append to their JSONL files, so re-running the pipeline
+over a corpus would duplicate every record already generated. `--only-new`
+skips any input whose per-file output directory already holds a non-empty
+dataset file (`vlm_training_data.jsonl` for IFC; `sllm_training_data.jsonl` /
+`dapt_training_data.jsonl` for PDF, per `--dataset`), so only files added
+since the last run are processed. Inputs that produced nothing last time
+(e.g. an image-only PDF that yielded zero chunks) have no output file and are
+retried. Combines with `--pdf`/`--ifc`, which makes an interrupted batch
+resumable by re-running the same command.
+
 ### Override model and output directory
 
 ```bash
@@ -745,7 +761,7 @@ usage: aec-pipeline [-h] [--input-dir DIR] [--output-dir DIR]
                     [--ifc-views {perspective,top,front,side} ...]
                     [--render-size N]
                     [--config JSON] [--save-config JSON]
-                    [--dry-run] [--verbose]
+                    [--only-new] [--dry-run] [--verbose]
 
 Options:
   --input-dir DIR              Directory to scan for PDF/IFC files
@@ -774,6 +790,7 @@ Options:
   --render-size N              Render resolution in pixels (square)
   --config JSON                Load settings from a JSON config file (overrides config.json)
   --save-config JSON           Save resolved settings to JSON and exit
+  --only-new                   Skip inputs whose dataset JSONL already exists
   --dry-run                    Discover files only; skip all inference
   --verbose                    Enable DEBUG-level logging
 ```
