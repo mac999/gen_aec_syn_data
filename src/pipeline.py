@@ -46,6 +46,7 @@ class AECPipeline:
         self,
         pdf_files: Optional[List[Path]] = None,
         ifc_files: Optional[List[Path]] = None,
+        only_new: bool = False,
     ) -> None:
         """
         Run the full pipeline.
@@ -54,6 +55,8 @@ class AECPipeline:
         ----------
         pdf_files : explicit list of PDF paths
         ifc_files : explicit list of IFC paths
+        only_new  : skip inputs whose dataset JSONL already exists in the
+                    output tree
 
         With neither given, input/ is scanned for both. Give either one and only
         the named files are processed.
@@ -73,6 +76,16 @@ class AECPipeline:
 
         logger.info("Found %d PDF(s) and %d IFC file(s) in %s",
                     len(pdfs), len(ifcs), self.config.input_dir)
+
+        if only_new:
+            n_pdf, n_ifc = len(pdfs), len(ifcs)
+            pdfs = [p for p in pdfs if not self._has_output(p, "pdf")]
+            ifcs = [p for p in ifcs if not self._has_output(p, "ifc")]
+            logger.info(
+                "--only-new: skipped %d PDF(s) and %d IFC(s) with existing "
+                "outputs — %d PDF(s) and %d IFC(s) left to process",
+                n_pdf - len(pdfs), n_ifc - len(ifcs), len(pdfs), len(ifcs),
+            )
 
         if not pdfs and not ifcs:
             logger.warning(
@@ -209,6 +222,34 @@ class AECPipeline:
             ifc_path.name, count, self.vlm_engine.jsonl_path,
         )
         return count
+
+    def _has_output(self, path: Path, kind: str) -> bool:
+        """
+        True when *path* already has a non-empty dataset file under output_dir.
+
+        The JSONL writers append, so re-processing an input duplicates its
+        records instead of replacing them — skipping here is what makes
+        --only-new safe to re-run over a whole corpus. An input that produced
+        nothing last time (e.g. an image-only PDF that yielded zero chunks)
+        has no file, stays "new", and is retried.
+        """
+        out_dir = self.config.file_output_dir(
+            path.stem, kind, self.config.relative_subdir(path))
+        if kind == "ifc":
+            names = ("vlm_training_data.jsonl",)
+        elif self.config.dataset_mode == "sft":
+            names = ("sllm_training_data.jsonl",)
+        elif self.config.dataset_mode == "dapt":
+            names = ("dapt_training_data.jsonl",)
+        else:
+            # mode "both": either file means a previous run covered this
+            # input, and appending the missing half alone is not possible
+            # without also duplicating the existing one.
+            names = ("sllm_training_data.jsonl", "dapt_training_data.jsonl")
+        return any(
+            (out_dir / n).exists() and (out_dir / n).stat().st_size > 0
+            for n in names
+        )
 
     @staticmethod
     def _discover(directory: Path, suffix: str) -> List[Path]:
