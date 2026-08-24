@@ -183,6 +183,12 @@ def _parse_args(defaults) -> argparse.Namespace:
 
     # ── Misc ──────────────────────────────────────────────────────────────
     parser.add_argument(
+        "--only-new",
+        action="store_true",
+        help="Process only input files with no dataset JSONL in the output tree yet. "
+             "The writers append, so re-running without this duplicates records.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Discover input files and print config, but do not run the pipeline.",
@@ -275,6 +281,7 @@ def main() -> int:
     pipeline.run(
         pdf_files=args.pdfs or None,
         ifc_files=args.ifcs or None,
+        only_new=args.only_new,
     )
     return 0
 
