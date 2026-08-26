@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-__version__ = "0.4.4"
+__version__ = "0.4.5"
 
 __all__ = ["PipelineConfig", "AECPipeline", "main", "__version__"]
 
