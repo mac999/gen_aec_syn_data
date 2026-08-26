@@ -629,6 +629,31 @@ class VLMEngine:
             return f"images/site_photo/{site_photo_path.name}", site_photo_path
         raise ValueError(f"Unknown vlm_tasks image token: {token!r} (use 'bim'/'site')")
 
+    def _provenance(self) -> dict:
+        """
+        Generation record embedded in every sample. The alternative — recovering
+        which model labelled a record from the config.json git history — was
+        needed once for the pre-v0.4.5 cohorts and is not reliable enough to
+        repeat: the answer depends on which checkout generated the data.
+        """
+        from . import __version__  # noqa: PLC0415 — avoid a cycle at import time
+        cfg = self.config
+        return {
+            "pipeline_version": __version__,
+            "vlm_backend": cfg.vlm_output_backend,
+            "vlm_model": cfg.vlm_ollama_model,
+            "vlm_temperature": cfg.vlm_output_temperature,
+            "sd_base_model": cfg.sd_base_model,
+            "controlnet_model": cfg.controlnet_model,
+            "control_hint": cfg.vlm_control_hint,
+            "i2i_steps": cfg.i2i_steps,
+            "i2i_cfg": cfg.i2i_cfg,
+            "controlnet_strength": cfg.controlnet_strength,
+            "sampler": cfg.vlm_sampler,
+            "scheduler": cfg.vlm_scheduler,
+            "seed": cfg.vlm_seed,
+        }
+
     def _build_task_samples(
         self,
         render_path: Path,
@@ -673,6 +698,7 @@ class VLMEngine:
                     bim_element_ids=elem_ids,
                     trade_type=trade_type,
                     view_type=view_type,
+                    provenance=self._provenance(),
                 ),
                 instruction=instruction,
                 output=output,

@@ -60,6 +60,12 @@ class VLMMetadata(BaseModel):
     bim_element_ids: List[str] = Field(description="IFC global IDs or element GUIDs")
     trade_type: str = Field(description="e.g. 철근콘크리트, 철골, 목구조")
     view_type: str = Field(description="3d_render | top_view | front_view | perspective")
+    provenance: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Generation record: pipeline version, VLM/SD models and "
+                    "sampling settings. Absent in datasets generated before v0.4.5; "
+                    "those must be traced through the config.json git history instead.",
+    )
 
 
 class VLMOutput(BaseModel):
