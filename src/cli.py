@@ -181,6 +181,30 @@ def _parse_args(defaults) -> argparse.Namespace:
         help="Save the resolved configuration to a JSON file and exit.",
     )
 
+    # ── Webview ───────────────────────────────────────────────────────────
+    parser.add_argument(
+        "--webview",
+        action="store_true",
+        help="Start the local web UI for reviewing the generated datasets "
+             "(input tree, viewers, options, generation) instead of running the pipeline.",
+    )
+    parser.add_argument(
+        "--webview-host",
+        default="127.0.0.1",
+        help="Interface the webview binds to.",
+    )
+    parser.add_argument(
+        "--webview-port",
+        type=int,
+        default=8050,
+        help="Port the webview listens on.",
+    )
+    parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Do not open a browser window when the webview starts.",
+    )
+
     # ── Misc ──────────────────────────────────────────────────────────────
     parser.add_argument(
         "--only-new",
@@ -253,6 +277,19 @@ def main() -> int:
         cfg.to_json(args.save_config)
         logger.info("Config saved. Exiting.")
         return 0
+
+    if args.webview:
+        from .config import default_config_path  # noqa: PLC0415
+        from .webview import run_webview         # noqa: PLC0415
+
+        return run_webview(
+            cfg,
+            host=args.webview_host,
+            port=args.webview_port,
+            open_browser=not args.no_browser,
+            config_path=args.config or default_config_path(),
+            project_root=Path(__file__).resolve().parent.parent,
+        )
 
     if args.dry_run:
         logger.info("=== DRY RUN ===")
