@@ -29,6 +29,7 @@ The pipeline that ingests AEC source documents and 3D BIM models (IFC) to automa
   - [5. Python Environment](#5-python-environment)
 - [Installation](#installation)
 - [Usage](#usage)
+- [Dataset review webview](#dataset-review-webview)
 - [Output Schema](#output-schema)
 - [Configuration](#configuration)
 - [Depth-conditioned site-photo synthesis](#depth-conditioned-site-photo-synthesis)
@@ -45,13 +46,16 @@ Modern AEC (Architecture, Engineering, Construction) AI models require large vol
 This pipeline automates the full synthesis loop:
 
 ```
-                                 ┌─ SFT  ─► QA pairs   (LLM)    ─► output/<pdf>_sft/sllm_training_data.jsonl
+                                 ┌─ SFT  ─► QA pairs   (LLM)    ─► output/<pdf>/sllm_training_data.jsonl
 PDF Documents  ──►  Text Chunks ─┤
-                                 └─ DAPT ─► raw corpus (no LLM) ─► output/<pdf>_dapt/dapt_training_data.jsonl
-IFC 3D Models  ──►  BIM Renders + Depth Maps ──► ComfyUI ControlNet ─► output/<ifc>_vlm/vlm_training_data.jsonl + Images
+                                 └─ DAPT ─► raw corpus (no LLM) ─► output/<pdf>/dapt_training_data.jsonl
+IFC 3D Models  ──►  BIM Renders + Depth Maps ──► ComfyUI ControlNet ─► output/<ifc>/vlm_training_data.jsonl + Images
 ```
 
-Each input file gets its own output folder named `<input-file-stem>_<sft|dapt|vlm>` under `output/`.
+Each input file gets its own output folder named after the file stem under
+`output/`; the three writers use distinct file names, so SFT, DAPT and VLM
+records from one input live side by side. Sub-folders of `input/` are mirrored,
+so `input/03_safety/rule.pdf` writes to `output/03_safety/rule/`.
 
 Local inference runs on a single machine. The sLLM branch scales with whatever
 the host can hold — an 8 GB VRAM GPU runs a 7B model, while a large-unified-memory
@@ -89,6 +93,7 @@ All settings have defaults in **`config.json`**, overridable per run by CLI flag
 | **Config & Secrets**   | `config.json` defaults + `--config`/`--save-config`; API keys loaded from `.env`        |
 | **Graceful Fallback**  | Pipeline continues even when a backend or ComfyUI is unreachable                              |
 | **CLI**                | Full`argparse` CLI with per-file targeting, dry-run, and config save/load                   |
+| **Review Webview**     | `--webview` — Flask dataset browser: PDF / IFC 3D viewers, dataset preview, Excel export      |
 | **Local-first**        | Ollama / llama-server keep all data on-machine; Gemini backend is opt-in cloud               |
 
 ---
@@ -97,24 +102,27 @@ All settings have defaults in **`config.json`**, overridable per run by CLI flag
 
 ```
 gen_aec_syn_data/
-├── main.py                  # CLI entry point
-├── config.json             # Default settings (loaded at startup)
+├── main.py                  # Launcher — `python main.py …`; delegates to src/cli.py
+├── run_pipeline.sh / .bat   # One-command launchers (venv + Ollama + pipeline)
+├── config.json              # Default settings (loaded at startup)
 ├── .env                     # Secrets (e.g. GEMINI_API_KEY) — git-ignored
 ├── .env.example             # Template for .env
 ├── requirements.txt
+├── pyproject.toml           # Packaging; exposes the `aec-pipeline` console script
 ├── input/                   # Drop PDF / IFC files here
 ├── output/                  # Auto-created; one sub-folder per input file
-│   ├── <pdf-stem>_sft/
-│   │   └── sllm_training_data.jsonl   # SFT (QA pairs)
-│   ├── <pdf-stem>_dapt/
+│   ├── <pdf-stem>/
+│   │   ├── sllm_training_data.jsonl   # SFT (QA pairs)
 │   │   └── dapt_training_data.jsonl   # DAPT (raw corpus)
-│   └── <ifc-stem>_vlm/
+│   └── <ifc-stem>/
 │       ├── vlm_training_data.jsonl
+│       ├── bim_elements.json          # element catalog sidecar
 │       └── images/
 │           ├── bim_render/          # colour render
 │           ├── depth/               # ControlNet depth hint
 │           └── site_photo/          # synthesised photograph
-└── src/
+└── src/                     # Importable package (`gen_aec_syn_data`)
+    ├── cli.py               # The actual CLI entry point (argparse + main())
     ├── config.py            # PipelineConfig dataclass + config.json loader
     ├── schemas.py           # Pydantic schemas — SFTSample, DAPTSample, VLMSample
     ├── pdf_extractor.py     # PyMuPDF chunker
@@ -122,8 +130,21 @@ gen_aec_syn_data/
     ├── sllm_sft_engine.py   # SFT synthesis — Ollama / llama-server / Gemini
     ├── sllm_dapt_engine.py  # DAPT corpus builder + document metadata inference
     ├── vlm_engine.py        # ComfyUI REST API client
-    └── pipeline.py          # Top-level orchestrator
+    ├── pipeline.py          # Top-level orchestrator
+    └── webview/             # `--webview` review UI (Flask; optional dependency)
+        ├── app.py           # Routes
+        ├── scanner.py       # Input/output trees + dataset statistics
+        ├── preview.py       # PDF pages, IFC tessellation, JSONL/text readers
+        ├── options.py       # config.json fields grouped for the options panel
+        ├── runner.py        # Background generation runs + log streaming
+        ├── export.py        # Input / output inventory to Excel
+        ├── templates/       # index.html
+        └── static/          # css + js (three.js loaded from CDN)
 ```
+
+> `main.py` is a thin shim: it imports and calls `src/cli.py:main()`, which is
+> the same function the installed `aec-pipeline` console script runs. Every
+> `python main.py …` example below works verbatim as `aec-pipeline …`.
 
 ---
 
@@ -360,7 +381,7 @@ cp .env.example .env
 GEMINI_API_KEY=your_api_key_here
 ```
 
-`main.py` loads `.env` automatically at startup (via `python-dotenv`). Alternatively pass `--gemini-api-key` or export `GEMINI_API_KEY` in your shell. `.env` is git-ignored and must never be committed.
+The CLI (`src/cli.py`, reached through `main.py` or `aec-pipeline`) loads `.env` automatically at startup (via `python-dotenv`). Alternatively pass `--gemini-api-key` or export `GEMINI_API_KEY` in your shell. `.env` is git-ignored and must never be committed.
 
 **Run with the Gemini backend**
 
@@ -425,7 +446,7 @@ name matches `vlm_control_hint` and logs a warning.
 
 ```bash
 cd ComfyUI
-python main.py --listen 127.0.0.1 --port 8188
+python main.py --listen 127.0.0.1 --port 8188   # ComfyUI's own main.py, not this project's
 ```
 
 Verify the API is up:
@@ -492,7 +513,7 @@ python -m venv .venv
 source .venv/bin/activate
 
 # 3. Install Python dependencies
-pip install -r requirements.txt
+pip install -r requirements.txt        # includes flask + openpyxl for --webview
 
 # 4. (Optional) Configure secrets for the Gemini backend
 cp .env.example .env      # then edit .env and set GEMINI_API_KEY
@@ -514,6 +535,9 @@ pip install .
 
 # …or an editable/develop install (code changes take effect without reinstalling)
 pip install -e .
+
+# …or with the review webview extras (flask + openpyxl)
+pip install ".[webview]"
 ```
 
 This exposes:
@@ -654,8 +678,9 @@ python main.py --dataset both --pdf input/regulation.pdf
 ```
 
 > For a PDF named `regulation.pdf`, SFT records are written to
-> `output/regulation_sft/sllm_training_data.jsonl` and DAPT records to
-> `output/regulation_dapt/dapt_training_data.jsonl`.
+> `output/regulation/sllm_training_data.jsonl` and DAPT records to
+> `output/regulation/dapt_training_data.jsonl` — one folder per input file,
+> one file per dataset kind.
 
 ### Gemini backend (cloud)
 
@@ -761,6 +786,8 @@ usage: aec-pipeline [-h] [--input-dir DIR] [--output-dir DIR]
                     [--ifc-views {perspective,top,front,side} ...]
                     [--render-size N]
                     [--config JSON] [--save-config JSON]
+                    [--webview] [--webview-host HOST] [--webview-port PORT]
+                    [--no-browser]
                     [--only-new] [--dry-run] [--verbose]
 
 Options:
@@ -769,9 +796,9 @@ Options:
   --pdf PDF_PATH               Explicit PDF file(s) to process (repeatable)
   --ifc IFC_PATH               Explicit IFC file(s) to process (repeatable)
 
-  --dataset {sft,dapt,both}    sLLM dataset(s) to generate from PDFs  [sft]
+  --dataset {sft,dapt,both}    sLLM dataset(s) to generate from PDFs  [both]
   --backend {ollama,llamaserver,gemini,none}
-                               LLM backend for SFT synthesis  [gemini]
+                               LLM backend for SFT synthesis  [ollama]
   --parallel N                 Concurrent worker threads
   --qa-per-chunk N             QA pairs per chunk per LLM call
 
@@ -790,6 +817,12 @@ Options:
   --render-size N              Render resolution in pixels (square)
   --config JSON                Load settings from a JSON config file (overrides config.json)
   --save-config JSON           Save resolved settings to JSON and exit
+
+  --webview                    Start the dataset review UI instead of a pipeline run
+  --webview-host HOST          Interface to bind  [127.0.0.1]
+  --webview-port PORT          Port to listen on  [8050]
+  --no-browser                 Do not open a browser window on start
+
   --only-new                   Skip inputs whose dataset JSONL already exists
   --dry-run                    Discover files only; skip all inference
   --verbose                    Enable DEBUG-level logging
@@ -797,9 +830,99 @@ Options:
 
 ---
 
+## Dataset review webview
+
+Generating a corpus is only half the job — the other half is checking that each
+input actually produced sensible records. `--webview` starts a local Flask UI
+that puts the source file and everything synthesised from it on one screen.
+
+```bash
+# Review the default input/ and output/ folders
+python main.py --webview
+
+# Point it at any pair of folders
+python main.py --webview --input-dir /data/corpus --output-dir /data/train
+
+# Bind elsewhere / stay headless
+python main.py --webview --webview-host 0.0.0.0 --webview-port 9000 --no-browser
+```
+
+It needs the two webview dependencies (already in `requirements.txt`):
+
+```bash
+pip install flask openpyxl        # or: pip install ".[webview]"
+```
+
+> The server binds to `127.0.0.1` by default and serves the local filesystem
+> under `--input-dir` / `--output-dir` only (paths escaping either root are
+> rejected). Bind to a public interface only on a network you trust.
+
+### Layout
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│  config.json │ ▶ Generate │ Stop │ Export inputs │ Export outputs │ ◐ │ KO│
+├───────────────┬────────────────────────────────┬─────────────────────────┤
+│ input tree    │                                │ output tree for the     │
+│ + name filter │   centre viewer                │ selected input file     │
+│ + type/count  │   • PDF   — page render,       │ + name filter           │
+│   /size stats │     zoom, full-text search     │ + record/size stats     │
+├───────────────┤   • IFC   — 3D view            ├─────────────────────────┤
+│ options       │     (IfcOpenShell + three.js)  │ dataset preview:        │
+│ DAPT/SFT/VLM  │   • images, JSONL, text        │ SFT / DAPT / VLM records│
+│ + run log     │                                │ + image thumbnails      │
+└───────────────┴────────────────────────────────┴─────────────────────────┘
+```
+
+**Left — input tree and options.** The `input/` folder is shown as a
+hierarchical tree with a name filter; PDF/IFC files are highlighted and the
+header carries the raw-file inventory (types, counts, total size). The lower
+panel groups every `config.json` field by purpose — Common, LLM backend, SFT,
+DAPT, PDF extraction, IFC rendering, VLM, ComfyUI — for editing. **Apply**
+updates the running session; **Save config.json** writes the values back to the
+file the server loaded. The same panel's second tab streams the generation log.
+
+**Centre — file viewer.** Selecting a node in either tree opens it here.
+PDFs are rasterised page by page by PyMuPDF with page navigation, zoom, and a
+full-text search that lists every hit with its page number — clicking a hit
+jumps straight to that page. IFC models are tessellated by IfcOpenShell and
+drawn with three.js (orbit / pan / zoom, per-IFC-type colour legend); geometry
+is converted from IFC's Z-up frame to the viewer's Y-up one, so a building
+stands upright. Images, JSONL and text files render inline, text with its own
+find-and-highlight.
+
+Every panel border is a splitter: drag to resize, double-click to restore the
+default. The layout is remembered per browser.
+
+**Right — generated output.** Picking an input file resolves the output folders
+it produced (both the current `output/<stem>/` layout and older `_sft`/`_dapt`/
+`_vlm` folders) and lists their contents, also filterable by name. The lower
+panel renders the dataset records themselves in a readable form — instruction,
+context, answer, evidence, labels — with paging, the raw JSON on demand, and
+thumbnails for VLM image references.
+
+**Top bar.** Shows the resolved input/output paths, opens the active
+`config.json`, starts or stops a generation run, and exports two spreadsheets:
+the input-file inventory (with each file's output folders and record counts)
+and the generated-dataset inventory (per file: kind, size, record count, source
+input). Both are `.xlsx` when `openpyxl` is installed, CSV otherwise.
+
+**Generating from the UI.** **Generate** runs the pipeline in a child process
+with the options currently shown, so the server stays responsive and **Stop**
+can cancel it. `Selected file only` restricts the run to the highlighted input
+file (`--pdf`/`--ifc`), `Only new` maps to `--only-new`, and `Dry run` maps to
+`--dry-run`. Log output streams into the left panel; when the run finishes the
+trees and statistics refresh by themselves.
+
+> The 3D view loads three.js from a CDN, so IFC rendering needs internet access
+> the first time a browser fetches it. Everything else — including PDF page
+> rendering — is served locally.
+
+---
+
 ## Output Schema
 
-### sLLM DAPT — `output/<pdf-stem>_dapt/dapt_training_data.jsonl`
+### sLLM DAPT — `output/<pdf-stem>/dapt_training_data.jsonl`
 
 One JSON object per line — raw domain text for continued pre-training (no LLM, no QA):
 
@@ -819,7 +942,7 @@ One JSON object per line — raw domain text for continued pre-training (no LLM,
 }
 ```
 
-### sLLM SFT — `output/<pdf-stem>_sft/sllm_training_data.jsonl`
+### sLLM SFT — `output/<pdf-stem>/sllm_training_data.jsonl`
 
 One JSON object per line (instruction + grounded answer with evidence tracing):
 
@@ -844,10 +967,10 @@ One JSON object per line (instruction + grounded answer with evidence tracing):
 }
 ```
 
-### VLM — `output/<ifc-stem>_vlm/vlm_training_data.jsonl`
+### VLM — `output/<ifc-stem>/vlm_training_data.jsonl`
 
 One JSON object per line (MMFineReason-SFT compatible). Image paths are
-relative to the file's own `_vlm` folder:
+relative to that input file's own output folder:
 
 ```json
 {
@@ -1116,6 +1239,35 @@ IFC mesh ─┬─► z-buffer ─► colour render ─────────�
 ---
 
 ## Revision History
+
+### v0.4.6 — Dataset review webview (`--webview`)
+
+- New `--webview` (plus `--webview-host`, `--webview-port`, `--no-browser`)
+  starts a local Flask UI for checking that a run actually produced sensible
+  data: input tree + name filter, PDF page viewer with full-text search, IFC
+  3D view (IfcOpenShell tessellation + three.js), per-input output tree, and a
+  readable SFT/DAPT/VLM record preview with image thumbnails.
+- The options panel exposes every `config.json` field grouped by purpose
+  (Common / LLM / SFT / DAPT / PDF / IFC / VLM / ComfyUI); **Apply** changes the
+  running session and **Save config.json** writes them back. **Generate** runs
+  the pipeline in a child process with live log streaming and a working
+  **Stop**; the input and generated-dataset inventories export to Excel.
+- Dark theme by default with a light toggle, a KO/EN language switch, and
+  draggable splitters on every panel border (double-click resets; the layout is
+  remembered per browser).
+- Lives in `src/webview/` and is imported only when the flag is used, so
+  `flask` and `openpyxl` stay optional (`pip install ".[webview]"`).
+- README: corrected the entry-point description (`main.py` is a shim over
+  `src/cli.py`), the per-file output layout (`output/<stem>/`, no
+  `_sft`/`_dapt`/`_vlm` suffix), and the `--dataset` / `--backend` defaults
+  quoted from `config.json`.
+
+### v0.4.5 — Generation provenance in every VLM sample
+
+- Which model labelled a record could previously only be recovered from the
+  `config.json` git history. Each `VLMSample` now carries the pipeline version,
+  the VLM/SD models and the sampling settings in its metadata. The field is
+  optional, so datasets generated before v0.4.5 still validate.
 
 ### v0.4.4 — Default VLM model → `qwen3-vl:30b` (DGX Spark)
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gen-aec-syn-data"
-version = "0.4.5"
+version = "0.4.6"
 description = "AEC Synthetic Dataset Generation Pipeline (100% Local Edition): generate sLLM/VLM training datasets from PDF documents and IFC/BIM models."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -44,6 +44,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["build>=1.0", "twine>=5.0"]
+# `aec-pipeline --webview` (dataset review UI + spreadsheet export)
+webview = ["flask>=3.0", "openpyxl>=3.1"]
 
 [project.scripts]
 aec-pipeline = "gen_aec_syn_data.cli:main"
@@ -55,5 +57,8 @@ Issues = "https://github.com/mac999/gen_aec_syn_data/issues"
 
 [tool.setuptools]
 # The importable package `gen_aec_syn_data` lives in the existing `src/` folder.
-packages = ["gen_aec_syn_data"]
+packages = ["gen_aec_syn_data", "gen_aec_syn_data.webview"]
 package-dir = { "gen_aec_syn_data" = "src" }
+
+[tool.setuptools.package-data]
+"gen_aec_syn_data.webview" = ["templates/*.html", "static/css/*.css", "static/js/*.js"]
