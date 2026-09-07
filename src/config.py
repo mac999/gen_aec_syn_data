@@ -101,6 +101,22 @@ JSON 스키마:
 JSON 응답:"""
 
 
+def default_config_path(path: str | Path | None = None) -> Optional[Path]:
+    """Where :meth:`PipelineConfig.load_default` would read config.json from.
+
+    Returns None when no file exists. The webview needs the path itself so it
+    can save edited options back to the same file.
+    """
+    if path is not None:
+        candidate = Path(path)
+        return candidate if candidate.exists() else None
+    for candidate in (Path.cwd() / "config.json",
+                      Path(__file__).resolve().parent.parent / "config.json"):
+        if candidate.exists():
+            return candidate
+    return None
+
+
 @dataclass
 class PipelineConfig:
     input_dir: Path = field(default_factory=lambda: Path("./input"))

@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AEC Synthetic Dataset Review</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">AEC</span>
+    <span data-i18n="app.title">합성 데이터셋 검토</span>
+  </div>
+
+  <div class="paths">
+    <span class="chip" title="input"><b data-i18n="top.in">IN</b> <span id="path-input">—</span></span>
+    <span class="chip" title="output"><b data-i18n="top.out">OUT</b> <span id="path-output">—</span></span>
+  </div>
+
+  <div class="actions">
+    <button id="btn-config" class="btn" data-i18n="top.config">config.json</button>
+    <button id="btn-generate" class="btn primary" data-i18n="top.generate">합성 데이터 생성</button>
+    <button id="btn-stop" class="btn danger" data-i18n="top.stop" disabled>중지</button>
+    <a id="btn-export-in" class="btn" href="/api/export/input" data-i18n="top.exportIn">입력 엑셀</a>
+    <a id="btn-export-out" class="btn" href="/api/export/output" data-i18n="top.exportOut">출력 엑셀</a>
+    <button id="btn-theme" class="btn icon" title="theme">◐</button>
+    <button id="btn-lang" class="btn icon" title="language">KO</button>
+  </div>
+</header>
+
+<main class="layout">
+
+  <!-- ── left ─────────────────────────────────────────────────────── -->
+  <div class="col col-left">
+  <section class="panel top">
+    <div class="panel-head">
+      <h2 data-i18n="left.title">입력 파일</h2>
+      <span id="stats-input" class="stats">—</span>
+    </div>
+    <div class="panel-tools">
+      <input id="filter-input" class="search" type="search"
+             data-i18n-ph="left.search" placeholder="파일명 검색…">
+      <button id="btn-refresh-input" class="btn tiny" title="refresh">⟳</button>
+    </div>
+    <div id="tree-input" class="tree scroll"></div>
+  </section>
+
+  <div class="hsplit" data-split="left" title="drag to resize"></div>
+
+  <section class="panel bottom">
+    <div class="tabs">
+      <button class="tab active" data-tab="options" data-i18n="opt.title">생성 옵션</button>
+      <button class="tab" data-tab="log" data-i18n="log.title">실행 로그</button>
+    </div>
+
+    <div id="tab-options" class="tabpane active">
+      <div class="panel-tools">
+        <button id="btn-apply" class="btn tiny" data-i18n="opt.apply">적용</button>
+        <button id="btn-save" class="btn tiny primary" data-i18n="opt.save">config.json 저장</button>
+        <label class="inline"><input id="opt-only-new" type="checkbox">
+          <span data-i18n="opt.onlyNew">신규만</span></label>
+        <label class="inline"><input id="opt-dry-run" type="checkbox">
+          <span data-i18n="opt.dryRun">드라이런</span></label>
+        <label class="inline"><input id="opt-selected-only" type="checkbox" checked>
+          <span data-i18n="opt.selectedOnly">선택 파일만</span></label>
+      </div>
+      <div id="options" class="scroll"></div>
+    </div>
+
+    <div id="tab-log" class="tabpane">
+      <div class="panel-tools">
+        <span id="run-state" class="stats" data-i18n="log.idle">대기 중</span>
+        <button id="btn-clear-log" class="btn tiny" data-i18n="log.clear">지우기</button>
+      </div>
+      <pre id="log" class="log scroll"></pre>
+    </div>
+  </section>
+
+  </div>
+
+  <div class="vsplit" data-split="left" title="drag to resize"></div>
+
+  <!-- ── centre ───────────────────────────────────────────────────── -->
+  <div class="col col-centre">
+  <section class="panel">
+    <div class="panel-head">
+      <h2 id="viewer-title" data-i18n="centre.empty">파일을 선택하세요</h2>
+      <span id="viewer-meta" class="stats"></span>
+    </div>
+    <div id="viewer-tools" class="panel-tools"></div>
+    <div id="viewer" class="viewer scroll"></div>
+  </section>
+
+  </div>
+
+  <div class="vsplit" data-split="right" title="drag to resize"></div>
+
+  <!-- ── right ────────────────────────────────────────────────────── -->
+  <div class="col col-right">
+  <section class="panel top">
+    <div class="panel-head">
+      <h2 data-i18n="right.title">생성 결과</h2>
+      <span id="stats-output" class="stats">—</span>
+    </div>
+    <div class="panel-tools">
+      <input id="filter-output" class="search" type="search"
+             data-i18n-ph="right.search" placeholder="파일명 검색…">
+      <button id="btn-refresh-output" class="btn tiny" title="refresh">⟳</button>
+    </div>
+    <div id="tree-output" class="tree scroll"></div>
+  </section>
+
+  <div class="hsplit" data-split="right" title="drag to resize"></div>
+
+  <section class="panel bottom">
+    <div class="panel-head">
+      <h2 data-i18n="dataset.title">데이터셋 미리보기</h2>
+      <span id="dataset-meta" class="stats"></span>
+    </div>
+    <div id="dataset-tools" class="panel-tools"></div>
+    <div id="dataset" class="dataset scroll"></div>
+  </section>
+  </div>
+
+</main>
+
+<div id="modal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3 id="modal-title">config.json</h3>
+      <button id="modal-close" class="btn tiny">✕</button>
+    </div>
+    <pre id="modal-body" class="scroll"></pre>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="{{ url_for('static', filename='js/i18n.js') }}"></script>
+<script src="{{ url_for('static', filename='js/splitters.js') }}"></script>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+<script type="module" src="{{ url_for('static', filename='js/ifc3d.js') }}"></script>
+</body>
+</html>
