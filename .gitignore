@@ -13,3 +13,6 @@ dist/
 
 # Local-only notes (kept out of the repo)
 todo.md
+
+# Editor settings (local preference)
+.vscode/

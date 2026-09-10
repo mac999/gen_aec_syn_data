@@ -104,6 +104,7 @@ All settings have defaults in **`config.json`**, overridable per run by CLI flag
 gen_aec_syn_data/
 ├── main.py                  # Launcher — `python main.py …`; delegates to src/cli.py
 ├── run_pipeline.sh / .bat   # One-command launchers (venv + Ollama + pipeline)
+├── run_webview.sh / .bat    # One-command launchers for the review webview
 ├── config.json              # Default settings (loaded at startup)
 ├── .env                     # Secrets (e.g. GEMINI_API_KEY) — git-ignored
 ├── .env.example             # Template for .env
@@ -836,6 +837,30 @@ Generating a corpus is only half the job — the other half is checking that eac
 input actually produced sensible records. `--webview` starts a local Flask UI
 that puts the source file and everything synthesised from it on one screen.
 
+<p align="center">
+  <img src="./doc/demo_webview.gif" width="900"></img></br>
+  <sub>Input tree → PDF page viewer with full-text search → IFC 3D view →
+  the generated VLM record, its BIM render and synthesised site photo</sub>
+</p>
+
+The launcher does the prerequisites for you — reuse the active venv/conda env
+(or create `.venv` on first run), make sure `flask` is installed, then start the
+server. Extra arguments are forwarded to `main.py`.
+
+```bash
+# Ubuntu / Linux
+./run_webview.sh                          # http://127.0.0.1:8050/
+./run_webview.sh --webview-port 9000
+```
+
+```bat
+:: Windows
+run_webview.bat
+run_webview.bat --no-browser
+```
+
+Or call the CLI directly, in an environment that already has the dependencies:
+
 ```bash
 # Review the default input/ and output/ folders
 python main.py --webview
@@ -1257,6 +1282,12 @@ IFC mesh ─┬─► z-buffer ─► colour render ─────────�
   remembered per browser).
 - Lives in `src/webview/` and is imported only when the flag is used, so
   `flask` and `openpyxl` stay optional (`pip install ".[webview]"`).
+- `run_webview.sh` (Ubuntu/Linux) and `run_webview.bat` (Windows) launch it in
+  one command: reuse the active venv/conda env (or `PYTHON`), create `.venv` and
+  install requirements on first run, install `flask`/`openpyxl` into an env that
+  predates the webview, warn when Ollama is unreachable, then serve on
+  `127.0.0.1:8050` (`WEBVIEW_HOST` / `WEBVIEW_PORT` override; extra args pass
+  through to `main.py`).
 - README: corrected the entry-point description (`main.py` is a shim over
   `src/cli.py`), the per-file output layout (`output/<stem>/`, no
   `_sft`/`_dapt`/`_vlm` suffix), and the `--dataset` / `--backend` defaults
