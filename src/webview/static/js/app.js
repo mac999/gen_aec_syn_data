@@ -335,9 +335,53 @@
     stage.id = "three-host";
     host.appendChild(stage);
 
+    const tools = $("#viewer-tools");
+
+    // 표시 모드 — 면/모서리 조합을 재생성 없이 전환한다
+    const modeWrap = el("label", "vctl");
+    modeWrap.appendChild(el("span", "vctl-label", t("view.mode")));
+    const mode = el("select", "vsel");
+    [["shaded", "view.mode.shaded"],
+     ["shaded_edges", "view.mode.shadedEdges"],
+     ["wireframe", "view.mode.wireframe"],
+     ["flat", "view.mode.flat"]].forEach(([value, key]) => {
+      const o = el("option", "", t(key));
+      o.value = value;
+      mode.appendChild(o);
+    });
+    mode.value = "shaded";
+    mode.onchange = () => window.AECViewer3D.setMode(mode.value);
+    modeWrap.appendChild(mode);
+    tools.appendChild(modeWrap);
+
+    // 투명도 — 외피를 반투명으로 낮춰 내부 부재를 확인할 때 쓴다
+    const opWrap = el("label", "vctl");
+    opWrap.appendChild(el("span", "vctl-label", t("view.opacity")));
+    const op = el("input", "vrange");
+    op.type = "range";
+    op.min = "15"; op.max = "100"; op.step = "5"; op.value = "100";
+    const opVal = el("span", "vctl-val", "100%");
+    op.oninput = () => {
+      opVal.textContent = op.value + "%";
+      window.AECViewer3D.setOpacity(Number(op.value) / 100);
+    };
+    opWrap.appendChild(op);
+    opWrap.appendChild(opVal);
+    tools.appendChild(opWrap);
+
+    // 축 표시 토글
+    const axWrap = el("label", "vctl");
+    const ax = el("input");
+    ax.type = "checkbox";
+    ax.checked = true;
+    ax.onchange = () => window.AECViewer3D.setAxes(ax.checked);
+    axWrap.appendChild(ax);
+    axWrap.appendChild(el("span", "vctl-label", t("view.axes")));
+    tools.appendChild(axWrap);
+
     const reset = el("button", "btn tiny", t("view.reset"));
     reset.onclick = () => window.AECViewer3D.reset();
-    $("#viewer-tools").appendChild(reset);
+    tools.appendChild(reset);
     $("#viewer-tools").appendChild(
       el("span", "stats", `${fmtNum(mesh.elements)} ${t("view.elements")}` +
         (mesh.truncated ? ` / ${fmtNum(mesh.total)}` : "")));

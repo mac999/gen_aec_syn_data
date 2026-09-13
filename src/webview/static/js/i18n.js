@@ -52,6 +52,10 @@
       "view.page": "페이지", "view.of": "/", "view.find": "본문 검색…",
       "view.hits": "건", "view.zoom": "배율", "view.open": "원본 열기",
       "view.elements": "요소", "view.reset": "시점 초기화",
+      "view.mode": "표시", "view.mode.shaded": "음영",
+      "view.mode.shadedEdges": "음영+모서리", "view.mode.wireframe": "와이어프레임",
+      "view.mode.flat": "평면 음영",
+      "view.opacity": "투명도", "view.axes": "축",
       "view.records": "레코드", "view.prev": "이전", "view.next": "다음",
       "view.all": "전체 출력 보기",
 
@@ -109,6 +113,10 @@
       "view.page": "Page", "view.of": "/", "view.find": "Find in text…",
       "view.hits": "hits", "view.zoom": "Zoom", "view.open": "Open raw",
       "view.elements": "elements", "view.reset": "Reset view",
+      "view.mode": "Display", "view.mode.shaded": "Shaded",
+      "view.mode.shadedEdges": "Shaded + edges", "view.mode.wireframe": "Wireframe",
+      "view.mode.flat": "Flat shading",
+      "view.opacity": "Opacity", "view.axes": "Axes",
       "view.records": "records", "view.prev": "Prev", "view.next": "Next",
       "view.all": "Show whole output tree",
 
