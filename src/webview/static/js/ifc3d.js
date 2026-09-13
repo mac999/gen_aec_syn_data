@@ -4,6 +4,10 @@ import * as THREE from "three";
 
 let renderer, scene, camera, host, frame;
 const orbit = { target: new THREE.Vector3(), radius: 10, theta: 0.9, phi: 1.05 };
+// 렌더 모드와 투명도는 재생성 없이 바꿔야 하므로 메시 참조를 들고 있는다
+let meshes = [];
+let axes = null;
+let state = { mode: 'shaded', opacity: 1 };
 let home = null;
 
 function themeColour() {
@@ -12,6 +16,8 @@ function themeColour() {
 }
 
 function dispose() {
+  meshes = [];
+  axes = null;
   if (frame) cancelAnimationFrame(frame);
   frame = null;
   if (renderer) {
@@ -106,16 +112,59 @@ function show(mount, data) {
       new THREE.Float32BufferAttribute(group.positions, 3));
     geometry.setIndex(group.indices);
     geometry.computeVertexNormals();
+    const colour = new THREE.Color(group.colour);
     const material = new THREE.MeshLambertMaterial({
-      color: new THREE.Color(group.colour),
-      side: THREE.DoubleSide
+      color: colour, side: THREE.DoubleSide,
+      transparent: true, opacity: 1, depthWrite: true
     });
-    scene.add(new THREE.Mesh(geometry, material));
+    const mesh = new THREE.Mesh(geometry, material);
+    // 와이어프레임은 같은 지오메트리의 모서리만 그린다. 면 대각선을 빼려고
+    // EdgesGeometry를 쓰며, 임계각 이하의 매끈한 이음매는 선을 만들지 않는다
+    const edges = new THREE.LineSegments(
+      new THREE.EdgesGeometry(geometry, 25),
+      new THREE.LineBasicMaterial({ color: colour, transparent: true, opacity: 1 })
+    );
+    edges.visible = false;
+    scene.add(mesh);
+    scene.add(edges);
+    meshes.push({ mesh, edges });
   });
 
   const grid = new THREE.GridHelper(span * 3, 30, 0x445066, 0x2a313d);
   grid.position.y = -(size[1] || 0) / 2;
   scene.add(grid);
+
+  // XYZ 축: 모델 바닥 모서리에 두고 모델 크기에 비례시킨다.
+  // 화면 중앙을 가리지 않도록 격자 원점이 아니라 모델 경계에 붙인다
+  axes = new THREE.Group();
+  const len = span * 0.42;
+  const AX = [
+    { dir: [1, 0, 0], colour: 0xd45b4a, label: "X" },
+    { dir: [0, 1, 0], colour: 0x63b463, label: "Y" },
+    { dir: [0, 0, 1], colour: 0x4a86d4, label: "Z" }
+  ];
+  AX.forEach(a => {
+    const v = new THREE.Vector3(...a.dir).multiplyScalar(len);
+    const line = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), v]),
+      new THREE.LineBasicMaterial({ color: a.colour })
+    );
+    axes.add(line);
+    const cone = new THREE.Mesh(
+      new THREE.ConeGeometry(len * 0.035, len * 0.11, 12),
+      new THREE.MeshBasicMaterial({ color: a.colour })
+    );
+    cone.position.copy(v);
+    if (a.label === "X") cone.rotation.z = -Math.PI / 2;
+    if (a.label === "Z") cone.rotation.x = Math.PI / 2;
+    axes.add(cone);
+    axes.add(makeLabel(a.label, a.colour,
+      v.clone().multiplyScalar(1.13), len * 0.16));
+  });
+  axes.position.set(-(size[0] || 0) / 2 - len * 0.25,
+                    -(size[1] || 0) / 2,
+                    -(size[2] || 0) / 2 - len * 0.25);
+  scene.add(axes);
 
   orbit.target.set(0, 0, 0);
   orbit.radius = span * 1.9 || 10;
@@ -131,6 +180,48 @@ function show(mount, data) {
     if (renderer && scene && camera) renderer.render(scene, camera);
   };
   loop();
+}
+
+function makeLabel(text, colour, position, scale) {
+  const c = document.createElement("canvas");
+  c.width = c.height = 64;
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = "#" + new THREE.Color(colour).getHexString();
+  ctx.font = "bold 44px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, 32, 34);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: new THREE.CanvasTexture(c), transparent: true, depthTest: false
+  }));
+  sprite.position.copy(position);
+  sprite.scale.setScalar(scale);
+  return sprite;
+}
+
+function setMode(mode) {
+  state.mode = mode;
+  meshes.forEach(({ mesh, edges }) => {
+    // wireframe: 면을 숨기고 모서리만. shaded+edges: 둘 다.
+    mesh.visible = mode !== "wireframe";
+    edges.visible = mode === "wireframe" || mode === "shaded_edges";
+    mesh.material.flatShading = mode === "flat";
+    mesh.material.needsUpdate = true;
+  });
+}
+
+function setOpacity(value) {
+  state.opacity = value;
+  meshes.forEach(({ mesh, edges }) => {
+    mesh.material.opacity = value;
+    // 반투명일 때 깊이 기록을 끄지 않으면 뒤쪽 면이 가려져 속이 안 보인다
+    mesh.material.depthWrite = value >= 0.99;
+    edges.material.opacity = Math.min(1, value + 0.35);
+  });
+}
+
+function setAxes(visible) {
+  if (axes) axes.visible = visible;
 }
 
 function reset() {
@@ -149,6 +240,11 @@ function retheme() {
 window.addEventListener("resize", resize);
 const observer = new ResizeObserver(resize);
 window.AECViewer3D = {
-  show(mount, data) { show(mount, data); observer.observe(mount); },
-  dispose, reset, retheme
+  show(mount, data) {
+    show(mount, data);
+    observer.observe(mount);
+    setMode(state.mode);
+    setOpacity(state.opacity);
+  },
+  dispose, reset, retheme, setMode, setOpacity, setAxes
 };

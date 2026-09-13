@@ -256,3 +256,13 @@ body.dragging-row, body.dragging-row * { cursor: row-resize !important; }
   border-radius: 5px; padding: 8px 14px; font-size: 12px; z-index: 60; max-width: 70vw; }
 .toast.err { border-left-color: var(--danger); }
 .toast.ok { border-left-color: var(--ok); }
+
+/* 3D 뷰어 툴바 컨트롤 */
+.vctl { display: inline-flex; align-items: center; gap: 6px; margin-right: 14px;
+        font-size: 12px; color: var(--fg-dim, #9aa3b2); }
+.vctl-label { white-space: nowrap; }
+.vctl-val { min-width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
+.vsel { background: var(--panel, #1b2029); color: var(--fg, #dfe5ee);
+        border: 1px solid var(--line, #2c333f); border-radius: 4px;
+        padding: 2px 6px; font-size: 12px; }
+.vrange { width: 96px; accent-color: var(--accent, #4a86d4); }
