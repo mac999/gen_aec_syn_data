@@ -13,6 +13,23 @@ dist/
 
 # Local-only notes (kept out of the repo)
 todo.md
+progress.md
+
+# Paper drafting workspace — scripts, manuscript, eval runs and figures.
+# Kept out of the pipeline repo for now; whether it becomes its own repository
+# or gets committed here (scripts + manuscript only, minus the large eval
+# artifacts) is still undecided. See TODO.md T1.
+gen_aec_syn_paper/
+gen_aec_syn_paper.zip
+
+# Scratch archives and ad-hoc test output
+*.zip
+tmp/
+.tmp/
+*.tmp
+*.bak
+*.log
+test_output/
 
 # Editor settings (local preference)
 .vscode/
