@@ -33,6 +33,7 @@ The pipeline that ingests AEC source documents and 3D BIM models (IFC) to automa
 - [Output Schema](#output-schema)
 - [Configuration](#configuration)
 - [Depth-conditioned site-photo synthesis](#depth-conditioned-site-photo-synthesis)
+- [Roadmap](#roadmap)
 - [Revision History](#revision-history)
 - [License](#license)
 - [Developer](#developer)
@@ -1260,6 +1261,77 @@ IFC mesh ─┬─► z-buffer ─► colour render ─────────�
           └────────────────────┴─► ControlNet ─► SD ──► images/site_photo/
                                    (empty latent, denoise 1.0)
 ```
+
+---
+
+## Roadmap
+
+Planned work, in rough priority order. Items describe known limits of the
+current pipeline and the direction for fixing them — none of this is
+implemented yet.
+
+### 1. Per-use-case SFT task types
+
+**Limitation today.** Every SFT sample is emitted with
+`task_type: "regulation_qa"`. The field exists on the schema and its docstring
+already names `numeric_judgment` and `risk_description`
+(`src/schemas.py`), but nothing can populate it: the engine falls back to a
+literal default (`src/sllm_sft_engine.py`), and the JSON schema embedded in
+`sft_prompt_template` never asks the model for a `task_type`. A census of
+generated data confirms it — 4,765 sampled records, 100 % `regulation_qa`.
+
+The VLM side already has what SFT lacks: `vlm_tasks` in `config.json` declares
+one entry per use case (`task_type`, `images`, `instruction`, `labels`) and
+emits a sample per task per render.
+
+**Plan.** Add a symmetric `sft_tasks` config array so a single corpus can yield
+several instruction styles, each with its own prompt template, its own allowed
+`final_label` set, and its own share of the per-chunk budget. Candidate task
+types — to be confirmed against real downstream use cases, not fixed yet:
+
+| `task_type` | Use case | `final_label` candidates |
+|---|---|---|
+| `regulation_qa` | Clause definitions, procedures (current behaviour) | `answerable` / `unanswerable` |
+| `numeric_judgment` | Compliance verdicts on numeric criteria | `compliant` / `non_compliant` |
+| `risk_description` | Hazard identification, required safety measures | `answerable` / `unanswerable` |
+| `spec_comparison` | Cross-referencing criteria between specifications | `match` / `mismatch` / `unknown` |
+
+Existing datasets stay usable: every record already carries
+`task_type: "regulation_qa"`, so new task types mix in without regeneration.
+
+### 2. Split RAG-oriented documents out of the SFT corpus
+
+**Limitation today.** Every PDF under the input tree is treated as
+fine-tuning material. That is the wrong default for a large part of an AEC
+corpus. Frequently amended regulations, revision-history documents, circulars
+and superseded editions are exactly the content where fine-tuning *hurts*:
+the model memorises a clause that is revised six months later, then states the
+stale figure confidently and with no way to correct it short of retraining.
+Such documents belong in a retrieval index, where a single reindex replaces the
+outdated text.
+
+**Plan.** Route documents to one of two destinations instead of one.
+
+- **Classification.** Decide per document — and ideally per chunk — whether the
+  content is stable enough to train on. Signals available without an LLM call:
+  revision markers in the filename and body (`제·개정`, `전부개정`,
+  `일부개정`, 호수, 시행일), document class (고시/훈령/예규 vs. 설계기준
+  본문), amendment density, and the presence of an explicit effective date.
+- **RAG dataset writer.** A third output kind beside SFT and DAPT, emitting
+  retrieval-shaped records — chunk text, embedding-ready fields, and the
+  provenance the SFT path already lacks: issuing body, document number,
+  effective date, revision label, and supersession links between editions.
+- **Volatility metadata.** Even documents that stay in the SFT set should carry
+  a volatility marker, so a training set can be filtered by it after the fact.
+- **CLI and config.** Extend `--dataset` beyond `sft | dapt | both` to cover
+  the RAG kind, with the classifier's thresholds exposed in `config.json` and
+  its decisions reviewable in the webview.
+
+**Open question.** Whether the split is decided by a rule set, by an LLM pass,
+or by an explicit per-directory declaration in config. A rule set is cheapest
+and auditable; the input tree's existing top-level categories
+(`01_design_standards_kds`, `02_specifications_kcs`, …) may already carry most
+of the signal.
 
 ---
 
