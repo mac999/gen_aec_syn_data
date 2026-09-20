@@ -62,6 +62,8 @@ html, body {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46%;
 }
 .chip b { color: var(--accent); margin-right: 5px; }
+button.chip { font: inherit; font-size: 11px; cursor: pointer; text-align: left; }
+button.chip:hover { border-color: var(--accent); color: var(--fg); }
 
 .actions { display: flex; gap: 6px; align-items: center; }
 
