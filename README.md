@@ -75,6 +75,18 @@ Two sLLM dataset modes are produced from PDFs (selected with `--dataset`):
 
 All settings have defaults in **`config.json`**, overridable per run by CLI flags or a full `--config` file.
 
+The bundled review webview (`--webview`) closes the loop: pick any input file
+and see the source (PDF pages with full-text search, or an interactive IFC 3D
+view), the records generated from it and the images they reference on one
+screen, edit the generation options and re-run without leaving the browser.
+
+<p align="center">
+  <img src="./doc/webview1.png" width="900"></img></br>
+  <sub>PDF input → page viewer with search hits → DAPT / SFT records for that document</sub></br>
+  <img src="./doc/webview2.png" width="900"></img></br>
+  <sub>IFC input → 3D viewer with per-class colouring → BIM renders and VLM records</sub>
+</p>
+
 ---
 
 ## Features
