@@ -45,6 +45,26 @@ def _prefix(node: dict, base: str) -> None:
             _prefix(child, base)
 
 
+_pick_lock = threading.Lock()
+
+
+def _ask_directory(initial: Path) -> str:
+    """Show the OS folder chooser; returns "" when cancelled or unavailable."""
+    try:
+        import tkinter  # noqa: PLC0415
+        from tkinter import filedialog  # noqa: PLC0415
+    except ImportError:
+        return ""
+    root = tkinter.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    try:
+        initialdir = str(initial) if initial.is_dir() else None
+        return filedialog.askdirectory(initialdir=initialdir, parent=root) or ""
+    finally:
+        root.destroy()
+
+
 def create_app(config, config_path: Optional[Path] = None,
                project_root: Optional[Path] = None):
     from flask import Flask, Response, jsonify, request, send_file  # noqa: PLC0415
@@ -221,6 +241,22 @@ def create_app(config, config_path: Optional[Path] = None,
         logger.info("Config updated: %d field(s)%s", len(changed),
                     f", saved to {saved}" if saved else " (session only)")
         return jsonify({"changed": changed, "saved": saved})
+
+    @app.post("/api/pick-dir")
+    def pick_dir():
+        """Open a native folder dialog and point input_dir/output_dir at it."""
+        side = (request.get_json(silent=True) or {}).get("side", "input")
+        try:
+            current = side_root(side)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        with _pick_lock:
+            picked = _ask_directory(current)
+        if not picked:
+            return jsonify({"changed": [], "path": ""})
+        changed = options.apply_updates(ctx.config, {f"{side}_dir": picked})
+        logger.info("%s_dir set via folder dialog: %s", side, picked)
+        return jsonify({"changed": changed, "path": picked})
 
     # -- generation -------------------------------------------------------
     @app.post("/api/run")

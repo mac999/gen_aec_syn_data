@@ -621,9 +621,40 @@
     try {
       const res = await postJSON("/api/config", { values, save: !!save });
       toast(save ? t("msg.saved") : t("msg.applied"), "ok");
-      if (res.changed.length) { await loadOptions(); await refreshState(); await loadInputTree(); }
+      if (res.changed.length) await reloadWorkspace(res.changed);
     } catch (e) {
       toast(e.message, "err");
+    }
+  }
+
+  // Refresh everything that depends on the config; a folder change also
+  // drops the current selection, viewer and dataset preview.
+  async function reloadWorkspace(changed) {
+    const dirChanged = (changed || []).some(n => n === "input_dir" || n === "output_dir");
+    await loadOptions();
+    await refreshState();
+    if (!dirChanged) { await loadInputTree(); return; }
+    state.selectedInput = null;
+    state.current = null;
+    markSelected(null);
+    clearViewer();
+    $("#viewer-title").dataset.i18n = "centre.empty";
+    $("#viewer-title").textContent = t("centre.empty");
+    $("#viewer-meta").textContent = "";
+    $("#dataset").innerHTML = "";
+    $("#dataset-tools").innerHTML = "";
+    await loadInputTree();
+    await loadOutputTree("");
+  }
+
+  async function pickDir(side) {
+    try {
+      const res = await postJSON("/api/pick-dir", { side });
+      if (!res.path) return;                       // cancelled
+      toast(t("msg.dirChanged"), "ok");
+      await reloadWorkspace(res.changed.length ? res.changed : [side + "_dir"]);
+    } catch (e) {
+      toast(e.message || t("msg.noDialog"), "err");
     }
   }
 
@@ -761,6 +792,8 @@
       if (window.AECViewer3D) window.AECViewer3D.retheme();
     };
     $("#btn-config").onclick = showConfigModal;
+    $("#chip-input").onclick = () => pickDir("input");
+    $("#chip-output").onclick = () => pickDir("output");
     $("#modal-close").onclick = () => $("#modal").classList.add("hidden");
     $("#modal").onclick = e => { if (e.target.id === "modal") $("#modal").classList.add("hidden"); };
 
