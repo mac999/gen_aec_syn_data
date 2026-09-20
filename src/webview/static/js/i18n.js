@@ -9,6 +9,7 @@
       "top.stop": "중지",
       "top.exportIn": "입력 엑셀",
       "top.exportOut": "출력 엑셀",
+      "top.pickIn": "입력 폴더 선택…", "top.pickOut": "출력 폴더 선택…",
 
       "left.title": "입력 파일",
       "left.search": "파일명 검색…",
@@ -39,6 +40,8 @@
       "msg.applied": "옵션이 적용되었습니다",
       "msg.saved": "config.json에 저장했습니다",
       "msg.noChange": "변경된 값이 없습니다",
+      "msg.dirChanged": "폴더를 변경했습니다",
+      "msg.noDialog": "폴더 선택 창을 열 수 없습니다. 생성 옵션에서 경로를 직접 입력하세요",
       "msg.started": "생성을 시작했습니다",
       "msg.stopped": "중지 요청을 보냈습니다",
       "msg.noOutput": "이 입력 파일의 생성 결과가 없습니다",
@@ -70,6 +73,7 @@
       "top.stop": "Stop",
       "top.exportIn": "Export inputs",
       "top.exportOut": "Export outputs",
+      "top.pickIn": "Choose input folder…", "top.pickOut": "Choose output folder…",
 
       "left.title": "Input files",
       "left.search": "Filter by name…",
@@ -100,6 +104,8 @@
       "msg.applied": "Options applied",
       "msg.saved": "Saved to config.json",
       "msg.noChange": "Nothing changed",
+      "msg.dirChanged": "Folder changed",
+      "msg.noDialog": "Folder dialog unavailable; edit the path under generation options",
       "msg.started": "Generation started",
       "msg.stopped": "Stop requested",
       "msg.noOutput": "No generated output for this input file",
@@ -143,6 +149,9 @@
       });
       (root || document).querySelectorAll("[data-i18n-ph]").forEach(el => {
         el.placeholder = I18N.t(el.dataset.i18nPh);
+      });
+      (root || document).querySelectorAll("[data-i18n-title]").forEach(el => {
+        el.title = I18N.t(el.dataset.i18nTitle);
       });
     }
   };
