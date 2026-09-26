@@ -29,6 +29,12 @@ The pipeline that ingests AEC source documents and 3D BIM models (IFC) to automa
   - [5. Python Environment](#5-python-environment)
 - [Installation](#installation)
 - [Usage](#usage)
+  - [Dataset kinds and how they relate](#dataset-kinds-and-how-they-relate)
+  - [Document routing (train vs retrieve)](#document-routing-train-vs-retrieve)
+  - [SFT task types and retrieval modes](#sft-task-types-and-retrieval-modes)
+  - [DPO preference pairs](#dpo-preference-pairs)
+  - [STaR filtering and RLVR export](#star-filtering-and-rlvr-export)
+  - [Output files](#output-files)
 - [Dataset review webview](#dataset-review-webview)
 - [Output Schema](#output-schema)
 - [Configuration](#configuration)
@@ -131,7 +137,12 @@ gen_aec_syn_data/
 ├── output/                  # Auto-created; one sub-folder per input file
 │   ├── <pdf-stem>/
 │   │   ├── sllm_training_data.jsonl   # SFT (QA pairs)
-│   │   └── dapt_training_data.jsonl   # DAPT (raw corpus)
+│   │   ├── dapt_training_data.jsonl   # DAPT (raw corpus)
+│   │   ├── star_training_data.jsonl   # SFT samples that passed verification
+│   │   ├── star_rejected.jsonl        # what was dropped, with the reason
+│   │   ├── dpo_training_data.jsonl    # preference pairs
+│   │   ├── rlvr_training_data.jsonl   # prompts + computable rewards
+│   │   └── rag_corpus.jsonl           # retrieval records (routed documents)
 │   └── <ifc-stem>/
 │       ├── vlm_training_data.jsonl
 │       ├── bim_elements.json          # element catalog sidecar
@@ -147,6 +158,14 @@ gen_aec_syn_data/
     ├── ifc_processor.py     # IfcOpenShell + z-buffer renderer / depth rasteriser
     ├── sllm_sft_engine.py   # SFT synthesis — Ollama / llama-server / Gemini
     ├── sllm_dapt_engine.py  # DAPT corpus builder + document metadata inference
+    ├── sft_tasks.py         # SFT task registry (templates + retrieval modes)
+    ├── raft.py              # Distractor passages for raft-mode prompts
+    ├── doc_routing.py       # Volatility scoring — train / retrieve / both
+    ├── rag_engine.py        # Retrieval records with provenance
+    ├── verifiers.py         # Rule checks: numbers, citations, refusal, length
+    ├── star_engine.py       # Keeps the generations that verify
+    ├── rlvr_engine.py       # Prompts + computable rewards for an RL loop
+    ├── dpo_engine.py        # Preference pairs built from accepted answers
     ├── vlm_engine.py        # ComfyUI REST API client
     ├── pipeline.py          # Top-level orchestrator
     └── webview/             # `--webview` review UI (Flask; optional dependency)
@@ -706,70 +725,47 @@ python main.py --dataset all --pdf input/regulation.pdf
 > `output/regulation/dapt_training_data.jsonl` — one folder per input file,
 > one file per dataset kind.
 
-### STaR filtering and RLVR export
+### Dataset kinds and how they relate
 
-The standard post-training recipe runs SFT, then preference optimisation,
-then reinforcement learning with verifiable rewards (RLVR). Both of the later
-stages need a verdict on a generated answer that is computed rather than
-judged, which is usually the hard part. Here the source chunk is available at
-generation time, so several checks can be run by rule (`src/verifiers.py`):
-
-| Check | Passes when |
-|---|---|
-| `numbers` | every measured value in the answer appears in the source |
-| `citations` | every article reference in the answer exists in the source |
-| `refusal` | the answer declines instead of asserting |
-| `length` | the answer is not a stub |
-
-Which checks apply depends on the task: `regulation_qa` runs all three
-content checks, `refusal` requires a decline, `terminology` (closed-book) only
-checks length.
-
-**STaR** (`--dataset star`) keeps the generations that pass and writes the
-rest to a rejects file with the reason, so a reviewer can see what was
-discarded:
-
-```bash
-python main.py --dataset star --pdf input/regulation.pdf
-python main.py --dataset star --star-min-score 0.7 --pdf input/regulation.pdf
-```
+One run can emit several dataset kinds. They are not alternatives to pick
+between — each corresponds to a stage of the usual training recipe, and the
+later ones are derived from the SFT samples of the same run.
 
 ```
-output/<stem>/star_training_data.jsonl   verified samples
-output/<stem>/star_rejected.jsonl        with {"verification": {"score", "reasons"}}
+                 PDF / IFC input
+                        │
+        ┌───────────────┴───────────────┐
+        │                               │
+   doc routing                     (IFC branch)
+        │                               │
+  ┌─────┴─────┐                    vlm_training_data
+  │           │
+train       retrieve
+  │           └──────────────► rag_corpus.jsonl
+  │
+  ├──► dapt_training_data.jsonl        continued pre-training
+  │
+  └──► sllm_training_data.jsonl        SFT
+            │
+            ├──► star_training_data.jsonl   verified subset  (STaR)
+            ├──► dpo_training_data.jsonl    preference pairs (DPO)
+            └──► rlvr_training_data.jsonl   prompts + rewards (RLVR)
 ```
 
-**RLVR** (`--dataset rlvr`) exports each prompt with the source it must agree
-with and the checks to run, so an RL loop can compute the reward itself:
+| Kind | Stage it feeds | Produced by |
+|---|---|---|
+| `dapt` | continued pre-training | chunking, no LLM |
+| `sft` | supervised fine-tuning | LLM generation across seven task types |
+| `star` | SFT, higher precision | rule verification of the SFT samples |
+| `dpo` | preference optimisation | corruption of accepted answers |
+| `rlvr` | RL with verifiable rewards | prompts paired with the checks to run |
+| `rag` | retrieval index (not training) | chunks of documents routed away from training |
+| `vlm` | vision-language fine-tuning | IFC renders, synthesised photographs, labels |
 
-```json
-{"id": "rlvr_sft_000001", "task_type": "regulation_qa",
- "prompt": "...", "source": "제3조(두께) ...", "reference_answer": "...",
- "verifiers": ["length", "numbers", "citations"],
- "reward": {"type": "rule", "scale": [0.0, 1.0], "aggregation": "mean"}}
-```
-
-The RL loop itself belongs to the training framework; this pipeline supplies
-the verifiable half. `--dataset all` runs SFT, DAPT, DPO, STaR and RLVR in one
-pass.
-
-### Output files
-
-Every dataset kind lands in one folder per input file, named after the input:
-
-```
-output/<category>/<input-stem>/
-    sllm_training_data.jsonl     SFT
-    dapt_training_data.jsonl     DAPT
-    star_training_data.jsonl     STaR-verified subset of the SFT samples
-    star_rejected.jsonl          what STaR discarded, with reasons
-    dpo_training_data.jsonl      preference pairs
-    rlvr_training_data.jsonl     prompts with computable rewards
-    rag_corpus.jsonl             retrieval records (routed documents)
-    vlm_training_data.jsonl      VLM samples (IFC inputs)
-    bim_elements.json            element catalogue
-    images/{bim_render,depth,site_photo}/
-```
+`--dataset` picks which of these are written: `sft`, `dapt`, `both`, `dpo`,
+`star`, `rlvr`, or `all`. Because DPO, STaR and RLVR read the SFT samples of
+the same run, each of those implies SFT generation. Document routing is
+independent and set with `--doc-routing`.
 
 ### Document routing (train vs retrieve)
 
@@ -892,6 +888,71 @@ defaults target hallucination rather than description: `absence_check` asks
 about elements that may not be in the frame, and `spatial_relation` asks only
 for relationships visible on screen. Add or remove entries to change the mix —
 no code change is needed.
+
+### STaR filtering and RLVR export
+
+The standard post-training recipe runs SFT, then preference optimisation,
+then reinforcement learning with verifiable rewards (RLVR). Both of the later
+stages need a verdict on a generated answer that is computed rather than
+judged, which is usually the hard part. Here the source chunk is available at
+generation time, so several checks can be run by rule (`src/verifiers.py`):
+
+| Check | Passes when |
+|---|---|
+| `numbers` | every measured value in the answer appears in the source |
+| `citations` | every article reference in the answer exists in the source |
+| `refusal` | the answer declines instead of asserting |
+| `length` | the answer is not a stub |
+
+Which checks apply depends on the task: `regulation_qa` runs all three
+content checks, `refusal` requires a decline, `terminology` (closed-book) only
+checks length.
+
+**STaR** (`--dataset star`) keeps the generations that pass and writes the
+rest to a rejects file with the reason, so a reviewer can see what was
+discarded:
+
+```bash
+python main.py --dataset star --pdf input/regulation.pdf
+python main.py --dataset star --star-min-score 0.7 --pdf input/regulation.pdf
+```
+
+```
+output/<stem>/star_training_data.jsonl   verified samples
+output/<stem>/star_rejected.jsonl        with {"verification": {"score", "reasons"}}
+```
+
+**RLVR** (`--dataset rlvr`) exports each prompt with the source it must agree
+with and the checks to run, so an RL loop can compute the reward itself:
+
+```json
+{"id": "rlvr_sft_000001", "task_type": "regulation_qa",
+ "prompt": "...", "source": "제3조(두께) ...", "reference_answer": "...",
+ "verifiers": ["length", "numbers", "citations"],
+ "reward": {"type": "rule", "scale": [0.0, 1.0], "aggregation": "mean"}}
+```
+
+The RL loop itself belongs to the training framework; this pipeline supplies
+the verifiable half. `--dataset all` runs SFT, DAPT, DPO, STaR and RLVR in one
+pass.
+
+### Output files
+
+Every dataset kind lands in one folder per input file, named after the input:
+
+```
+output/<category>/<input-stem>/
+    sllm_training_data.jsonl     SFT
+    dapt_training_data.jsonl     DAPT
+    star_training_data.jsonl     STaR-verified subset of the SFT samples
+    star_rejected.jsonl          what STaR discarded, with reasons
+    dpo_training_data.jsonl      preference pairs
+    rlvr_training_data.jsonl     prompts with computable rewards
+    rag_corpus.jsonl             retrieval records (routed documents)
+    vlm_training_data.jsonl      VLM samples (IFC inputs)
+    bim_elements.json            element catalogue
+    images/{bim_render,depth,site_photo}/
+```
 
 ### Gemini backend (cloud)
 
