@@ -18,7 +18,7 @@
       "dataset.title": "데이터셋 미리보기",
       "centre.empty": "파일을 선택하세요",
 
-      "opt.title": "생성 옵션",
+      "opt.title": "생성 옵션", "grp.dpo": "DPO 선호쌍",
       "opt.apply": "적용",
       "opt.save": "config.json 저장",
       "opt.onlyNew": "신규만",
@@ -82,7 +82,7 @@
       "dataset.title": "Dataset preview",
       "centre.empty": "Select a file",
 
-      "opt.title": "Generation options",
+      "opt.title": "Generation options", "grp.dpo": "DPO preferences",
       "opt.apply": "Apply",
       "opt.save": "Save config.json",
       "opt.onlyNew": "Only new",

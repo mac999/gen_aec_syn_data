@@ -32,6 +32,8 @@ from .config import (
     SFT_TEMPLATE_PLACEHOLDERS,
     PipelineConfig,
 )
+from .raft import build_context
+from .sft_tasks import SFTTask, load_tasks, select_task
 from .schemas import DocumentChunk, EvidenceBlock, SFTInput, SFTInputMetadata, SFTOutput, SFTSample
 
 
@@ -180,6 +182,12 @@ class SLLM_SFT_Engine:
             config.sft_negative_prompt_template or DEFAULT_SFT_NEGATIVE_PROMPT_TEMPLATE,
         )
 
+        self._tasks = load_tasks(getattr(config, "sft_tasks", None))
+        self._task_of_chunk: dict = {}
+        # Kept so the DPO stage can derive preference pairs from this run
+        # without re-reading the JSONL.
+        self.samples: List[SFTSample] = []
+
         # Output path is set per input file via set_output_dir(); default here
         # keeps the engine usable standalone.
         self.jsonl_path = self.config.sft_output_dir / "sllm_training_data.jsonl"
@@ -202,15 +210,35 @@ class SLLM_SFT_Engine:
         i = chunk.chunk_index
         return int((i + 1) * ratio) > int(i * ratio)
 
-    def _render_prompt(self, chunk: DocumentChunk, negative: bool) -> str:
-        """Fill the positive or negative template for *chunk*."""
-        template = self._neg_template if negative else self._pos_template
+    def _render_prompt(self, chunk: DocumentChunk, negative: bool,
+                       task: Optional[SFTTask] = None,
+                       pool: Optional[List[DocumentChunk]] = None) -> str:
+        """Fill the template for *chunk*, supplying whatever context its mode wants."""
+        if negative:
+            template, mode = self._neg_template, "open_book"
+        elif task is not None:
+            template, mode = task.template, task.retrieval
+        else:
+            template, mode = self._pos_template, "open_book"
+
+        if mode == "closed_book":
+            text = ""
+        elif mode == "raft":
+            # The refusal task must not see the answering passage.
+            golden = not (task and task.name == "refusal")
+            text = build_context(chunk, pool or [chunk],
+                                 self.config.raft_distractors,
+                                 include_golden=golden,
+                                 max_chars=self.config.chunk_max_size)
+        else:
+            text = chunk.text[: self.config.chunk_max_size]
+
         try:
             return template.format(
                 doc_id=chunk.doc_id,
                 chunk_index=chunk.chunk_index,
                 n=self.config.qa_per_chunk,
-                text=chunk.text[: self.config.chunk_max_size],
+                text=text,
             )
         except (KeyError, IndexError, ValueError) as exc:
             kind = "negative" if negative else "positive"
@@ -240,10 +268,12 @@ class SLLM_SFT_Engine:
         )
         successful = 0
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = [pool.submit(self._synthesise_with_retry, c) for c in chunks]
+            futures = [pool.submit(self._synthesise_with_retry, c, chunks)
+                       for c in chunks]
             for future in as_completed(futures):
                 for sample in (future.result() or []):
                     self._append_sample(sample)
+                    self.samples.append(sample)
                     successful += 1
                     if successful >= self.config.max_samples_per_doc:
                         logger.info(
@@ -257,9 +287,13 @@ class SLLM_SFT_Engine:
 
     # ── Retry wrapper ───────────────────────────────────────────────────────
 
-    def _synthesise_with_retry(self, chunk: DocumentChunk) -> List[SFTSample]:
+    def _synthesise_with_retry(self, chunk: DocumentChunk,
+                               pool: Optional[List[DocumentChunk]] = None
+                               ) -> List[SFTSample]:
         negative = self._is_negative_chunk(chunk)
-        prompt_text = self._render_prompt(chunk, negative)
+        task = None if negative else select_task(self._tasks, chunk.chunk_index)
+        prompt_text = self._render_prompt(chunk, negative, task, pool)
+        self._task_of_chunk[chunk.chunk_index] = task.name if task else "negative"
         last_error: Optional[Exception] = None
         for attempt in range(1, self.config.llm_max_retries + 1):
             try:
@@ -460,7 +494,9 @@ class SLLM_SFT_Engine:
             sample_id = self._next_id()
             return SFTSample(
                 id=sample_id,
-                task_type=data.get("task_type", "regulation_qa"),
+                # The generating task, not whatever the model called it.
+                task_type=self._task_of_chunk.get(
+                    chunk.chunk_index, data.get("task_type", "regulation_qa")),
                 domain_tags=data.get("domain_tags", []),
                 source_doc_ids=data.get("source_doc_ids", [chunk.doc_id]),
                 instruction=data.get("instruction", ""),

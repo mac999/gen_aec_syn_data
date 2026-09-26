@@ -122,7 +122,9 @@ class PipelineConfig:
     input_dir: Path = field(default_factory=lambda: Path("./input"))
     output_dir: Path = field(default_factory=lambda: Path("./output"))
 
-    dataset_mode: str = "sft"             # "sft" | "dapt" | "both"
+    # "sft" | "dapt" | "both" | "dpo" | "all". "dpo" derives preference
+    # pairs from the SFT samples produced in the same run.
+    dataset_mode: str = "sft"
 
     # LLM backend 
     llm_backend: str = "ollama"           # "ollama" | "llamaserver" | "gemini"
@@ -370,6 +372,22 @@ class PipelineConfig:
     # Fraction (0.0–1.0) of chunks that generate "unanswerable" negative samples
     # instead of positive QA pairs. 0.0 disables negatives (backward-compatible).
     sft_negative_ratio: float = 0.0
+
+    # Task mix. Empty list -> sft_tasks.DEFAULT_SFT_TASKS. Each entry is
+    # {name, retrieval, template, weight}; retrieval is open_book |
+    # closed_book | raft. A single open_book task reproduces the old
+    # behaviour, which taught extraction from supplied text and nothing else.
+    sft_tasks: list = field(default_factory=list)
+    # Passages added beside the answering one in raft prompts.
+    raft_distractors: int = 3
+
+    # DPO preference pairs. Rejections are constructed from the accepted
+    # answer, never judged by a model: unsupported (citation removed),
+    # fabricated (a threshold altered), overreach (answering when the
+    # correct response is to decline).
+    dpo_rejection_kinds: list = field(
+        default_factory=lambda: ["unsupported", "fabricated", "overreach"])
+    dpo_seed: int = 20260926
 
     # Processing limits
     max_samples_per_doc: int = 50
