@@ -26,7 +26,9 @@ from .doc_routing import classify, extract_provenance
 from .dpo_engine import DPOEngine
 from .sllm_dapt_engine import SLLM_DAPT_Engine
 from .rag_engine import RAGEngine
+from .rlvr_engine import RLVREngine
 from .sllm_sft_engine import SLLM_SFT_Engine
+from .star_engine import STaREngine
 from .vlm_engine import VLMEngine
 
 logger = logging.getLogger("AEC_Pipeline.pipeline")
@@ -46,6 +48,8 @@ class AECPipeline:
         self.vlm_engine = VLMEngine(config)
         self.dpo_engine = DPOEngine(config)
         self.rag_engine = RAGEngine(config)
+        self.star_engine = STaREngine(config)
+        self.rlvr_engine = RLVREngine(config)
 
     def run(
         self,
@@ -139,9 +143,11 @@ class AECPipeline:
             return 0
 
         mode = self.config.dataset_mode
-        want_sft = mode in ("sft", "both", "dpo", "all")
+        want_sft = mode in ("sft", "both", "dpo", "star", "rlvr", "all")
         want_dapt = mode in ("dapt", "both", "all")
         want_dpo = mode in ("dpo", "all")
+        want_star = mode in ("star", "all")
+        want_rlvr = mode in ("rlvr", "all")
 
         # Routing decides whether this document trains, gets indexed, or both.
         # Amended regulations memorised into weights go stale; the same text in
@@ -206,12 +212,32 @@ class AECPipeline:
             except Exception as exc:
                 logger.error("[PDF] RAG engine error for '%s': %s", pdf_path.name, exc)
 
+        sft_dicts = [s.to_jsonl_dict() for s in self.sllm_sft_engine.samples]
+        chunk_text = {c.chunk_index: c.text for c in chunks}
+
+        if want_star and sft_dicts:
+            try:
+                self.star_engine.set_output_dir(
+                    self.config.file_output_dir(stem, "star", subdir))
+                count += self.star_engine.filter_samples(sft_dicts, chunk_text)
+                logger.info("[PDF] STaR -> %s", self.star_engine.jsonl_path)
+            except Exception as exc:
+                logger.error("[PDF] STaR engine error for '%s': %s", pdf_path.name, exc)
+
+        if want_rlvr and sft_dicts:
+            try:
+                self.rlvr_engine.set_output_dir(
+                    self.config.file_output_dir(stem, "rlvr", subdir))
+                count += self.rlvr_engine.export(sft_dicts, chunk_text)
+                logger.info("[PDF] RLVR -> %s", self.rlvr_engine.jsonl_path)
+            except Exception as exc:
+                logger.error("[PDF] RLVR engine error for '%s': %s", pdf_path.name, exc)
+
         if want_dpo and self.sllm_sft_engine.samples:
             try:
                 self.dpo_engine.set_output_dir(
                     self.config.file_output_dir(stem, "dpo", subdir))
-                count += self.dpo_engine.build_pairs(
-                    [s.to_jsonl_dict() for s in self.sllm_sft_engine.samples])
+                count += self.dpo_engine.build_pairs(sft_dicts)
                 logger.info("[PDF] DPO -> %s", self.dpo_engine.jsonl_path)
             except Exception as exc:
                 logger.error("[PDF] DPO engine error for '%s': %s", pdf_path.name, exc)

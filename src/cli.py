@@ -75,10 +75,12 @@ def _parse_args(defaults) -> argparse.Namespace:
     parser.add_argument(
         "--dataset",
         default=defaults.dataset_mode,
-        choices=["sft", "dapt", "both", "dpo", "all"],
+        choices=["sft", "dapt", "both", "dpo", "star", "rlvr", "all"],
         help="Which sLLM dataset(s) to generate from PDFs: 'sft' (QA pairs), "
              "'dapt' (raw domain corpus, no LLM), 'both', 'dpo' (SFT plus "
-             "preference pairs derived from it), or 'all'.",
+             "preference pairs derived from it), 'star' (SFT filtered to "
+             "generations that verify against their source), 'rlvr' (prompts "
+             "paired with computable rewards), or 'all'.",
     )
 
     # ── LLM backend ───────────────────────────────────────────────────────
@@ -208,6 +210,13 @@ def _parse_args(defaults) -> argparse.Namespace:
 
     # ── Misc ──────────────────────────────────────────────────────────────
     parser.add_argument(
+        "--star-min-score",
+        type=float,
+        default=defaults.star_min_score,
+        help="Verification score a sample must reach to be kept by STaR "
+             "(0.0-1.0; 1.0 requires every check to pass).",
+    )
+    parser.add_argument(
         "--doc-routing",
         default=defaults.doc_routing,
         choices=["train", "retrieve", "both", "auto"],
@@ -289,6 +298,7 @@ def _build_config(args: argparse.Namespace, base):
     cfg.ifc_render_height = args.render_size
     cfg.raft_distractors = args.raft_distractors
     cfg.doc_routing = args.doc_routing
+    cfg.star_min_score = args.star_min_score
     if args.dpo_rejections:
         cfg.dpo_rejection_kinds = [k.strip() for k in args.dpo_rejections.split(",") if k.strip()]
     if args.sft_tasks:

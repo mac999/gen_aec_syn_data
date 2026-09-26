@@ -23,6 +23,7 @@ GROUPS: List[tuple] = [
              "raft_distractors",
              "sft_prompt_template", "sft_negative_prompt_template"]),
     ("dpo", ["dpo_rejection_kinds", "dpo_seed"]),
+    ("star", ["star_min_score"]),
     ("dapt", ["dapt_infer_metadata", "dapt_dedupe"]),
     ("pdf", ["chunk_min_size", "chunk_max_size", "chunk_overlap",
              "space_gap_ratio", "ocr_enabled", "ocr_languages", "ocr_dpi",
