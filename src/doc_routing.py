@@ -56,8 +56,20 @@ class RouteDecision:
                 "signals": self.signals}
 
 
+def _compiled(signals) -> List[tuple]:
+    """Build (name, weight, regex) triples from config entries."""
+    out = []
+    for item in signals or []:
+        try:
+            out.append((str(item["name"]), float(item["weight"]),
+                        re.compile(str(item["pattern"]))))
+        except (KeyError, TypeError, re.error) as exc:
+            raise ValueError(f"routing_signals entry invalid: {item} ({exc})") from exc
+    return out
+
+
 def classify(path: Path, head_text: str = "", threshold: float = 2.0,
-             both_margin: float = 1.0) -> RouteDecision:
+             both_margin: float = 1.0, signals=None) -> RouteDecision:
     """Score *path* (and its opening text) and pick a route.
 
     ``threshold`` is the score at which a document is considered volatile.
@@ -67,7 +79,8 @@ def classify(path: Path, head_text: str = "", threshold: float = 2.0,
     haystack = f"{path.name}\n{head_text[:2000]}"
     score = 0.0
     hits: List[str] = []
-    for name, weight, pattern in _SIGNALS + _STABLE:
+    table = _compiled(signals) if signals else _SIGNALS + _STABLE
+    for name, weight, pattern in table:
         if pattern.search(haystack):
             score += weight
             hits.append(name)

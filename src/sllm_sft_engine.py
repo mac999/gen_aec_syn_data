@@ -184,6 +184,7 @@ class SLLM_SFT_Engine:
 
         self._tasks = load_tasks(getattr(config, "sft_tasks", None))
         self._task_of_chunk: dict = {}
+        self._llm_by_model: dict = {}
         # Kept so the DPO stage can derive preference pairs from this run
         # without re-reading the JSONL.
         self.samples: List[SFTSample] = []
@@ -302,7 +303,8 @@ class SLLM_SFT_Engine:
                 elif self.config.llm_backend == "gemini":
                     raw = self._call_gemini(prompt_text)
                 else:
-                    raw = self._call_ollama(prompt_text)
+                    raw = self._call_ollama(
+                        prompt_text, task.model if task else "")
                 samples = self._parse_multi_output(raw, chunk, negative)
                 if samples:
                     return samples
@@ -322,17 +324,20 @@ class SLLM_SFT_Engine:
 
     # ── Ollama backend ──────────────────────────────────────────────────────
 
-    def _call_ollama(self, prompt_text: str) -> str:
-        self._ensure_ollama_llm()
+    def _call_ollama(self, prompt_text: str, model: str = "") -> str:
+        self._ensure_ollama_llm(model)
         return self._llm.invoke(prompt_text)
 
-    def _ensure_ollama_llm(self) -> None:
+    def _ensure_ollama_llm(self, model: str = "") -> None:
+        """Open (and cache) an Ollama client for *model* or the run default."""
+        name = model or self.config.ollama_model
         with self._llm_lock:
-            if self._llm is not None:
+            if self._llm_by_model.get(name) is not None:
+                self._llm = self._llm_by_model[name]
                 return
             logger.info(
                 "Initialising Ollama: %s @ %s",
-                self.config.ollama_model, self.config.ollama_base_url,
+                name, self.config.ollama_base_url,
             )
             # Generation limits are set here rather than left to the model's
             # defaults. Ollama otherwise opens the model at its full trained
@@ -355,7 +360,7 @@ class SLLM_SFT_Engine:
                 # budget and the answer channel comes back empty — measured on
                 # this prompt: 2048 tokens spent, 0 characters returned.
                 llm = _Ollama(
-                    model=self.config.ollama_model,
+                    model=name,
                     base_url=self.config.ollama_base_url,
                     temperature=self.config.ollama_temperature,
                     reasoning=False,
@@ -364,7 +369,7 @@ class SLLM_SFT_Engine:
             except (ImportError, TypeError):
                 from langchain_community.llms import Ollama as _Ollama  # noqa: PLC0415
                 llm = _Ollama(
-                    model=self.config.ollama_model,
+                    model=name,
                     base_url=self.config.ollama_base_url,
                     temperature=self.config.ollama_temperature,
                     **opts,
@@ -372,7 +377,8 @@ class SLLM_SFT_Engine:
             # The prompt is rendered per call (positive/negative varies per
             # chunk), so cache only the LLM and invoke it with the finished text.
             self._llm = llm
-            logger.info("Ollama LLM ready.")
+            self._llm_by_model[name] = llm
+            logger.info("Ollama LLM ready: %s", name)
 
     # ── Gemini backend ──────────────────────────────────────────────────────
 

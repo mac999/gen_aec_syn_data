@@ -156,7 +156,8 @@ class AECPipeline:
         if setting == "auto":
             decision = classify(pdf_path, chunks[0].text if chunks else "",
                                 self.config.routing_threshold,
-                                self.config.routing_both_margin)
+                                self.config.routing_both_margin,
+                                self.config.routing_signals)
         else:
             decision = classify(pdf_path)
             decision.route = setting if setting in ("train", "retrieve", "both") else "train"
