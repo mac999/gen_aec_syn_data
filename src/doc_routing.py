@@ -76,14 +76,21 @@ def classify(path: Path, head_text: str = "", threshold: float = 2.0,
     Scores within ``both_margin`` below it get "both": borderline documents
     are worth training on and indexing, since neither choice is clearly wrong.
     """
-    haystack = f"{path.name}\n{head_text[:2000]}"
+    # A filename says what the document *is*; the body merely mentions things.
+    # Standards quote their own amendment history, so a body hit counts half —
+    # otherwise every design standard scores as a volatile notice.
+    name_text = path.name
+    body_text = head_text[:2000]
     score = 0.0
     hits: List[str] = []
     table = _compiled(signals) if signals else _SIGNALS + _STABLE
     for name, weight, pattern in table:
-        if pattern.search(haystack):
+        if pattern.search(name_text):
             score += weight
             hits.append(name)
+        elif pattern.search(body_text):
+            score += weight * 0.5
+            hits.append(f"{name}~")
     if score >= threshold:
         route = "retrieve"
     elif score >= threshold - both_margin:

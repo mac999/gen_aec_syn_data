@@ -50,8 +50,13 @@ def _perturb_number(text: str, rng: random.Random) -> Optional[str]:
 
 
 def _strip_citation(text: str) -> str:
-    """Remove clause references so the claim stands without support."""
+    """Remove clause references so the claim stands without support.
+
+    Covers both conventions in this corpus: statute articles ("제3조") and the
+    dotted section numbers design standards use ("232.3.1").
+    """
     out = re.sub(r"제\s*\d+\s*조(?:의\d+)?(?:\s*제?\d+\s*항)?", "", text)
+    out = re.sub(r"\d+(?:\.\d+){1,3}\s*절?", "", out)
     out = re.sub(r"\[[^\]]*\]|\([^)]*조[^)]*\)", "", out)
     return re.sub(r"\s{2,}", " ", out).strip() or text
 
