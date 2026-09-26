@@ -117,8 +117,7 @@ class DPOEngine:
             # Only meaningful where declining was the correct behaviour.
             if label != "unanswerable":
                 return None
-            return ("제시된 조문에 따르면 해당 기준은 일반적으로 적용되며, "
-                    "관련 규정에서 정한 값을 따르면 됩니다.")
+            return self.config.dpo_overreach_text
         logger.warning("Unknown dpo rejection kind: %s", kind)
         return None
 

@@ -101,7 +101,8 @@
         "clear",
         "partial",
         "unclear"
-      ]
+      ],
+      "model": ""
     },
     {
       "task_type": "element_detection",
@@ -113,7 +114,8 @@
         "detected",
         "partial",
         "none"
-      ]
+      ],
+      "model": ""
     },
     {
       "task_type": "material_identification",
@@ -126,7 +128,8 @@
         "철골",
         "복합구조",
         "기타"
-      ]
+      ],
+      "model": ""
     },
     {
       "task_type": "progress_assessment",
@@ -139,7 +142,8 @@
         "structure",
         "finishing",
         "completed"
-      ]
+      ],
+      "model": ""
     },
     {
       "task_type": "bim_site_comparison",
@@ -153,7 +157,8 @@
         "partial_match",
         "mismatch",
         "unknown"
-      ]
+      ],
+      "model": ""
     },
     {
       "task_type": "absence_check",
@@ -165,7 +170,8 @@
         "visible",
         "not_visible",
         "uncertain"
-      ]
+      ],
+      "model": ""
     },
     {
       "task_type": "spatial_relation",
@@ -178,7 +184,8 @@
         "clear",
         "partial",
         "unclear"
-      ]
+      ],
+      "model": ""
     }
   ],
   "max_samples_per_doc": 50,
@@ -186,7 +193,64 @@
   "llm_max_retries": 3,
   "dapt_infer_metadata": true,
   "dapt_dedupe": true,
-  "sft_tasks": [],
+  "sft_tasks": [
+    {
+      "name": "regulation_qa",
+      "retrieval": "open_book",
+      "weight": 2.0,
+      "model": "",
+      "verifiers": [],
+      "template": "You generate Korean AEC training data. Write questions and answers in Korean.\n\nRead the clause below and write {n} question-answer pairs that can be answered from it alone. Each answer must cite a clause, table or figure.\n\nClause (doc_id={doc_id}, chunk={chunk_index}):\n---\n{text}\n---\n\nRespond with valid JSON only, no markdown fence:\n{{\"qa_pairs\": [{{\"instruction\": \"<question in Korean>\", \"input\": {{\"context\": \"<supporting text or empty>\", \"metadata\": {{\"project_type\": \"<건축|교량|터널|도로|댐>\", \"language\": \"ko\"}}}}, \"output\": {{\"answer\": \"<answer in Korean>\", \"evidence\": [{{\"doc_id\": \"{doc_id}\", \"section\": \"<clause reference>\"}}], \"final_label\": \"<compliant|non_compliant|answerable|unanswerable>\"}}, \"domain_tags\": [\"<tag>\", \"<tag>\"], \"source_doc_ids\": [\"{doc_id}\"]}}]}}"
+    },
+    {
+      "name": "procedure",
+      "retrieval": "open_book",
+      "weight": 1.0,
+      "model": "",
+      "verifiers": [],
+      "template": "You generate Korean AEC training data. Write questions and answers in Korean.\n\nFrom the clause below, write {n} question-answer pairs about *procedure*: the order of steps, who performs them, what triggers each step, and what must be submitted or recorded. Answer in ordered steps, not a single sentence. Procedures outlive individual threshold values, so state the process rather than quoting numbers.\n\nClause (doc_id={doc_id}, chunk={chunk_index}):\n---\n{text}\n---\n\nRespond with valid JSON only, no markdown fence:\n{{\"qa_pairs\": [{{\"instruction\": \"<question in Korean>\", \"input\": {{\"context\": \"<supporting text or empty>\", \"metadata\": {{\"project_type\": \"<건축|교량|터널|도로|댐>\", \"language\": \"ko\"}}}}, \"output\": {{\"answer\": \"<answer in Korean>\", \"evidence\": [{{\"doc_id\": \"{doc_id}\", \"section\": \"<clause reference>\"}}], \"final_label\": \"<compliant|non_compliant|answerable|unanswerable>\"}}, \"domain_tags\": [\"<tag>\", \"<tag>\"], \"source_doc_ids\": [\"{doc_id}\"]}}]}}"
+    },
+    {
+      "name": "terminology",
+      "retrieval": "closed_book",
+      "weight": 1.0,
+      "model": "",
+      "verifiers": [],
+      "template": "You generate Korean AEC training data. Write questions and answers in Korean.\n\nUsing construction-domain knowledge, write {n} question-answer pairs that explain the technical terms appearing in document '{doc_id}': what the term means, the field synonyms and abbreviations for it, and how it differs from a term it is often confused with. No clause text is supplied; answer from domain knowledge and set final_label to 'answerable'.\n\nRespond with valid JSON only, no markdown fence:\n{{\"qa_pairs\": [{{\"instruction\": \"<question in Korean>\", \"input\": {{\"context\": \"<supporting text or empty>\", \"metadata\": {{\"project_type\": \"<건축|교량|터널|도로|댐>\", \"language\": \"ko\"}}}}, \"output\": {{\"answer\": \"<answer in Korean>\", \"evidence\": [{{\"doc_id\": \"{doc_id}\", \"section\": \"<clause reference>\"}}], \"final_label\": \"<compliant|non_compliant|answerable|unanswerable>\"}}, \"domain_tags\": [\"<tag>\", \"<tag>\"], \"source_doc_ids\": [\"{doc_id}\"]}}]}}"
+    },
+    {
+      "name": "reasoning",
+      "retrieval": "open_book",
+      "weight": 1.0,
+      "model": "",
+      "verifiers": [],
+      "template": "You generate Korean AEC training data. Write questions and answers in Korean.\n\nFrom the clause below, write {n} question-answer pairs that require *multi-step reasoning*: apply the clause to a concrete situation, compare two conditions, or derive a consequence. Each answer must show the intermediate steps before the conclusion.\n\nClause (doc_id={doc_id}, chunk={chunk_index}):\n---\n{text}\n---\n\nRespond with valid JSON only, no markdown fence:\n{{\"qa_pairs\": [{{\"instruction\": \"<question in Korean>\", \"input\": {{\"context\": \"<supporting text or empty>\", \"metadata\": {{\"project_type\": \"<건축|교량|터널|도로|댐>\", \"language\": \"ko\"}}}}, \"output\": {{\"answer\": \"<answer in Korean>\", \"evidence\": [{{\"doc_id\": \"{doc_id}\", \"section\": \"<clause reference>\"}}], \"final_label\": \"<compliant|non_compliant|answerable|unanswerable>\"}}, \"domain_tags\": [\"<tag>\", \"<tag>\"], \"source_doc_ids\": [\"{doc_id}\"]}}]}}"
+    },
+    {
+      "name": "structure",
+      "retrieval": "open_book",
+      "weight": 0.5,
+      "model": "",
+      "verifiers": [],
+      "template": "You generate Korean AEC training data. Write questions and answers in Korean.\n\nFrom the clause below, write {n} question-answer pairs about *document structure*: which article, paragraph or item states a given rule, what a cross-reference points to, and how the provisions are organised. Answers must name the reference path.\n\nClause (doc_id={doc_id}, chunk={chunk_index}):\n---\n{text}\n---\n\nRespond with valid JSON only, no markdown fence:\n{{\"qa_pairs\": [{{\"instruction\": \"<question in Korean>\", \"input\": {{\"context\": \"<supporting text or empty>\", \"metadata\": {{\"project_type\": \"<건축|교량|터널|도로|댐>\", \"language\": \"ko\"}}}}, \"output\": {{\"answer\": \"<answer in Korean>\", \"evidence\": [{{\"doc_id\": \"{doc_id}\", \"section\": \"<clause reference>\"}}], \"final_label\": \"<compliant|non_compliant|answerable|unanswerable>\"}}, \"domain_tags\": [\"<tag>\", \"<tag>\"], \"source_doc_ids\": [\"{doc_id}\"]}}]}}"
+    },
+    {
+      "name": "refusal",
+      "retrieval": "raft",
+      "weight": 1.0,
+      "model": "",
+      "verifiers": [],
+      "template": "You generate Korean AEC training data. Write questions and answers in Korean.\n\nBelow are several passages. Only some relate to the question you will write. Produce {n} question-answer pairs where the question is plausible for this domain but the passages do NOT contain the answer. Each answer must state honestly that the supplied material does not support an answer. Set evidence to [] and final_label to 'unanswerable'. Never invent facts.\n\nPassages (doc_id={doc_id}, chunk={chunk_index}):\n---\n{text}\n---\n\nRespond with valid JSON only, no markdown fence:\n{{\"qa_pairs\": [{{\"instruction\": \"<question in Korean>\", \"input\": {{\"context\": \"<supporting text or empty>\", \"metadata\": {{\"project_type\": \"<건축|교량|터널|도로|댐>\", \"language\": \"ko\"}}}}, \"output\": {{\"answer\": \"<answer in Korean>\", \"evidence\": [{{\"doc_id\": \"{doc_id}\", \"section\": \"<clause reference>\"}}], \"final_label\": \"<compliant|non_compliant|answerable|unanswerable>\"}}, \"domain_tags\": [\"<tag>\", \"<tag>\"], \"source_doc_ids\": [\"{doc_id}\"]}}]}}"
+    },
+    {
+      "name": "grounded_rag",
+      "retrieval": "raft",
+      "weight": 1.5,
+      "model": "",
+      "verifiers": [],
+      "template": "You generate Korean AEC training data. Write questions and answers in Korean.\n\nBelow are several passages; only some are relevant. Write {n} question-answer pairs answerable from the relevant passages only. Each answer must first say which passage supports it, then give the answer. Ignore the unrelated passages — do not mention their content.\n\nPassages (doc_id={doc_id}, chunk={chunk_index}):\n---\n{text}\n---\n\nRespond with valid JSON only, no markdown fence:\n{{\"qa_pairs\": [{{\"instruction\": \"<question in Korean>\", \"input\": {{\"context\": \"<supporting text or empty>\", \"metadata\": {{\"project_type\": \"<건축|교량|터널|도로|댐>\", \"language\": \"ko\"}}}}, \"output\": {{\"answer\": \"<answer in Korean>\", \"evidence\": [{{\"doc_id\": \"{doc_id}\", \"section\": \"<clause reference>\"}}], \"final_label\": \"<compliant|non_compliant|answerable|unanswerable>\"}}, \"domain_tags\": [\"<tag>\", \"<tag>\"], \"source_doc_ids\": [\"{doc_id}\"]}}]}}"
+    }
+  ],
   "raft_distractors": 3,
   "dpo_rejection_kinds": [
     "unsupported",
@@ -198,5 +262,8 @@
   "routing_threshold": 2.0,
   "routing_both_margin": 1.0,
   "rag_min_chars": 120,
-  "star_min_score": 1.0
+  "star_min_score": 1.0,
+  "star_task_verifiers": {},
+  "dpo_overreach_text": "제시된 조문에 따르면 해당 기준은 일반적으로 적용되며, 관련 규정에서 정한 값을 따르면 됩니다.",
+  "routing_signals": []
 }

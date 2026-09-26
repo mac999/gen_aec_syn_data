@@ -51,6 +51,11 @@ class SFTTask:
     retrieval: str
     template: str
     weight: float = 1.0
+    # Optional per-task overrides. ``model`` lets a task run on a different
+    # LLM than the run default — reasoning on a larger model, terminology on
+    # a cheaper one. ``verifiers`` overrides which checks STaR and RLVR apply.
+    model: str = ""
+    verifiers: tuple = ()
 
     def renders_context(self) -> bool:
         return self.retrieval in ("open_book", "raft")
@@ -164,7 +169,9 @@ def load_tasks(raw: Any) -> List[SFTTask]:
         weight = float(item.get("weight", 1.0))
         if weight <= 0:
             raise ValueError(f"sft_tasks[{i}] '{name}': weight must be > 0")
-        tasks.append(SFTTask(name, mode, str(template), weight))
+        verifiers = tuple(item.get("verifiers") or ())
+        tasks.append(SFTTask(name, mode, str(template), weight,
+                             str(item.get("model") or ""), verifiers))
     return tasks
 
 
