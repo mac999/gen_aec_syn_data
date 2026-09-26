@@ -154,11 +154,44 @@
         "mismatch",
         "unknown"
       ]
+    },
+    {
+      "task_type": "absence_check",
+      "images": [
+        "site"
+      ],
+      "instruction": "이 사진에서 다음 요소가 보이는지 판단하라: 타워크레인, 엘리베이터, 배관 설비. 보이지 않는 요소는 '보이지 않음'이라고 명확히 답하고, 추측하지 마라.",
+      "labels": [
+        "visible",
+        "not_visible",
+        "uncertain"
+      ]
+    },
+    {
+      "task_type": "spatial_relation",
+      "images": [
+        "bim",
+        "site"
+      ],
+      "instruction": "첫 번째 BIM 렌더링을 기준으로 구조 요소들의 상대적 위치 관계를 설명하라 (예: 어느 부재가 앞쪽/위쪽에 있는지). 화면에서 확인 가능한 관계만 기술하라.",
+      "labels": [
+        "clear",
+        "partial",
+        "unclear"
+      ]
     }
   ],
   "max_samples_per_doc": 50,
   "batch_size": 5,
   "llm_max_retries": 3,
   "dapt_infer_metadata": true,
-  "dapt_dedupe": true
+  "dapt_dedupe": true,
+  "sft_tasks": [],
+  "raft_distractors": 3,
+  "dpo_rejection_kinds": [
+    "unsupported",
+    "fabricated",
+    "overreach"
+  ],
+  "dpo_seed": 20260926
 }
