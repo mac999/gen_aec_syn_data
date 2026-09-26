@@ -389,6 +389,15 @@ class PipelineConfig:
         default_factory=lambda: ["unsupported", "fabricated", "overreach"])
     dpo_seed: int = 20260926
 
+    # Document routing. Frequently amended regulations are better retrieved
+    # than memorised, so they can be diverted from the training writers to a
+    # retrieval corpus. "auto" scores each document; "train"/"retrieve"/"both"
+    # force one route for the whole run.
+    doc_routing: str = "train"
+    routing_threshold: float = 2.0
+    routing_both_margin: float = 1.0
+    rag_min_chars: int = 120
+
     # Processing limits
     max_samples_per_doc: int = 50
     batch_size: int = 5

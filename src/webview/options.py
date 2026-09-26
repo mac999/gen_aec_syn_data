@@ -12,8 +12,9 @@ from typing import Any, Dict, List
 
 # group key -> config field names, in display order
 GROUPS: List[tuple] = [
-    ("common", ["input_dir", "output_dir", "dataset_mode",
+    ("common", ["input_dir", "output_dir", "dataset_mode", "doc_routing",
                 "max_samples_per_doc", "batch_size"]),
+    ("rag", ["routing_threshold", "routing_both_margin", "rag_min_chars"]),
     ("llm", ["llm_backend", "llm_parallel", "llm_max_retries",
              "ollama_model", "ollama_base_url", "ollama_temperature",
              "ollama_num_ctx", "ollama_num_predict", "ollama_json_mode",

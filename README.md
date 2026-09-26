@@ -108,6 +108,7 @@ screen, edit the generation options and re-run without leaving the browser.
 | **CLI**                | Full`argparse` CLI with per-file targeting, dry-run, and config save/load                   |
 | **SFT task mix**       | Seven task types across open-book, closed-book and RAFT retrieval modes                     |
 | **DPO**                | Preference pairs constructed from the source, not model-judged                               |
+| **Document routing**   | Volatile documents diverted to a retrieval corpus instead of the training writers            |
 | **Review Webview**     | `--webview` — Flask dataset browser: PDF / IFC 3D viewers, dataset preview, Excel export      |
 | **Local-first**        | Ollama / llama-server keep all data on-machine; Gemini backend is opt-in cloud               |
 
@@ -703,6 +704,52 @@ python main.py --dataset all --pdf input/regulation.pdf
 > `output/regulation/sllm_training_data.jsonl` and DAPT records to
 > `output/regulation/dapt_training_data.jsonl` — one folder per input file,
 > one file per dataset kind.
+
+### Document routing (train vs retrieve)
+
+Not every document should be trained on. Frequently amended regulations,
+revision notices and forms are where fine-tuning does damage: the model
+memorises a threshold that is revised six months later, then states the stale
+figure with no way to correct it short of retraining. Those documents belong
+in a retrieval index, where one reindex replaces the outdated text.
+
+`--doc-routing auto` scores each document on observable signals — no LLM call
+— and sends it to one of three destinations:
+
+| Route | Destination | Typical document |
+|---|---|---|
+| `train` | SFT / DAPT writers | design standards, specifications, manuals |
+| `retrieve` | `rag_corpus.jsonl` | amended regulations, notices, issue-numbered circulars |
+| `both` | all writers | borderline: forms, applications |
+
+Signals and their weights (positive argues for retrieval): amendment markers
+`+2.0`, notice wording `+1.5`, form wording `+1.5`, issue numbers `+1.0`,
+effective dates `+0.5`; standards score `-2.0` and manuals `-1.5`. Documents
+at or above `routing_threshold` (default 2.0) are retrieved; those within
+`routing_both_margin` below it get both. On the reference corpus of 1,958
+documents this gives roughly 50% train, 26% both, 24% retrieve.
+
+```bash
+# Score each document and split accordingly
+python main.py --doc-routing auto --dataset both
+
+# Send everything to the retrieval corpus instead
+python main.py --doc-routing retrieve
+```
+
+Default is `train`, which keeps the previous behaviour.
+
+Retrieval records carry the provenance the training path never recorded, plus
+a content hash and the routing decision:
+
+```json
+{"id": "rag_<doc>_00007", "text": "...", "content_hash": "a1b2...",
+ "doc_id": "...", "chunk_index": 7, "page_numbers": [3],
+ "provenance": {"issuing_body": "국토교통부", "document_no": "제2024-147호",
+                "effective_date": "2024년 3월 1일", "revision_label": "전부개정"},
+ "routing": {"route": "retrieve", "volatility_score": 5.0,
+             "signals": ["amendment", "notice", "issue_no"]}}
+```
 
 ### SFT task types and retrieval modes
 
@@ -1377,43 +1424,29 @@ Still open from the original plan: per-task `final_label` vocabularies
 (`compliant` / `non_compliant` for numeric judgement, `match` / `mismatch`
 for specification comparison). Today every task shares one label set.
 
-### 2. Split RAG-oriented documents out of the SFT corpus
+### 2. Split RAG-oriented documents out of the SFT corpus — done
 
-**Limitation today.** Every PDF under the input tree is treated as
-fine-tuning material. That is the wrong default for a large part of an AEC
-corpus. Frequently amended regulations, revision-history documents, circulars
-and superseded editions are exactly the content where fine-tuning *hurts*:
-the model memorises a clause that is revised six months later, then states the
-stale figure confidently and with no way to correct it short of retraining.
-Such documents belong in a retrieval index, where a single reindex replaces the
-outdated text.
+Implemented as `--doc-routing`; see
+[Document routing](#document-routing-train-vs-retrieve). Classification runs
+on filename and opening text with no LLM call, and retrieval records carry
+issuing body, document number, effective date and revision label.
 
-**Plan.** Route documents to one of two destinations instead of one.
+Still open: per-chunk routing (the decision is per document today), and
+supersession links between editions of the same regulation.
 
-- **Classification.** Decide per document — and ideally per chunk — whether the
-  content is stable enough to train on. Signals available without an LLM call:
-  revision markers in the filename and body (`제·개정`, `전부개정`,
-  `일부개정`, 호수, 시행일), document class (고시/훈령/예규 vs. 설계기준
-  본문), amendment density, and the presence of an explicit effective date.
-- **RAG dataset writer.** A third output kind beside SFT and DAPT, emitting
-  retrieval-shaped records — chunk text, embedding-ready fields, and the
-  provenance the SFT path already lacks: issuing body, document number,
-  effective date, revision label, and supersession links between editions.
-- **Volatility metadata.** Even documents that stay in the SFT set should carry
-  a volatility marker, so a training set can be filtered by it after the fact.
-- **CLI and config.** Extend `--dataset` beyond `sft | dapt | both` to cover
-  the RAG kind, with the classifier's thresholds exposed in `config.json` and
-  its decisions reviewable in the webview.
+### v0.5.0 — SFT task mix, document routing, DPO
 
-**Open question.** Whether the split is decided by a rule set, by an LLM pass,
-or by an explicit per-directory declaration in config. A rule set is cheapest
-and auditable; the input tree's existing top-level categories
-(`01_design_standards_kds`, `02_specifications_kcs`, …) may already carry most
-of the signal.
-
----
-
-## Revision History
+- `sft_tasks` replaces the single regulation-QA template with seven tasks
+  across three retrieval modes (`open_book`, `closed_book`, `raft`). A census
+  of the previous output found one task type and the source clause present in
+  87% of prompts, which trained extraction and nothing else.
+- `--doc-routing auto` scores each document and sends amended regulations,
+  notices and forms to `rag_corpus.jsonl` instead of the training writers.
+- `--dataset dpo|all` writes preference pairs built from the accepted answer
+  (citation removed, threshold altered, or answering where declining was
+  correct) rather than ranked by a model.
+- Two VLM tasks target hallucination: `absence_check` and `spatial_relation`.
+- New options appear on the CLI, in `config.json`, and in the webview panel.
 
 ### v0.4.6 — Dataset review webview (`--webview`)
 
