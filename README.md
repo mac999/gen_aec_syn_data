@@ -109,6 +109,7 @@ screen, edit the generation options and re-run without leaving the browser.
 | **SFT task mix**       | Seven task types across open-book, closed-book and RAFT retrieval modes                     |
 | **DPO**                | Preference pairs constructed from the source, not model-judged                               |
 | **Document routing**   | Volatile documents diverted to a retrieval corpus instead of the training writers            |
+| **STaR / RLVR**        | Rule-verified sample filtering, and prompts exported with computable rewards                 |
 | **Review Webview**     | `--webview` — Flask dataset browser: PDF / IFC 3D viewers, dataset preview, Excel export      |
 | **Local-first**        | Ollama / llama-server keep all data on-machine; Gemini backend is opt-in cloud               |
 
@@ -704,6 +705,71 @@ python main.py --dataset all --pdf input/regulation.pdf
 > `output/regulation/sllm_training_data.jsonl` and DAPT records to
 > `output/regulation/dapt_training_data.jsonl` — one folder per input file,
 > one file per dataset kind.
+
+### STaR filtering and RLVR export
+
+The standard post-training recipe runs SFT, then preference optimisation,
+then reinforcement learning with verifiable rewards (RLVR). Both of the later
+stages need a verdict on a generated answer that is computed rather than
+judged, which is usually the hard part. Here the source chunk is available at
+generation time, so several checks can be run by rule (`src/verifiers.py`):
+
+| Check | Passes when |
+|---|---|
+| `numbers` | every measured value in the answer appears in the source |
+| `citations` | every article reference in the answer exists in the source |
+| `refusal` | the answer declines instead of asserting |
+| `length` | the answer is not a stub |
+
+Which checks apply depends on the task: `regulation_qa` runs all three
+content checks, `refusal` requires a decline, `terminology` (closed-book) only
+checks length.
+
+**STaR** (`--dataset star`) keeps the generations that pass and writes the
+rest to a rejects file with the reason, so a reviewer can see what was
+discarded:
+
+```bash
+python main.py --dataset star --pdf input/regulation.pdf
+python main.py --dataset star --star-min-score 0.7 --pdf input/regulation.pdf
+```
+
+```
+output/<stem>/star_training_data.jsonl   verified samples
+output/<stem>/star_rejected.jsonl        with {"verification": {"score", "reasons"}}
+```
+
+**RLVR** (`--dataset rlvr`) exports each prompt with the source it must agree
+with and the checks to run, so an RL loop can compute the reward itself:
+
+```json
+{"id": "rlvr_sft_000001", "task_type": "regulation_qa",
+ "prompt": "...", "source": "제3조(두께) ...", "reference_answer": "...",
+ "verifiers": ["length", "numbers", "citations"],
+ "reward": {"type": "rule", "scale": [0.0, 1.0], "aggregation": "mean"}}
+```
+
+The RL loop itself belongs to the training framework; this pipeline supplies
+the verifiable half. `--dataset all` runs SFT, DAPT, DPO, STaR and RLVR in one
+pass.
+
+### Output files
+
+Every dataset kind lands in one folder per input file, named after the input:
+
+```
+output/<category>/<input-stem>/
+    sllm_training_data.jsonl     SFT
+    dapt_training_data.jsonl     DAPT
+    star_training_data.jsonl     STaR-verified subset of the SFT samples
+    star_rejected.jsonl          what STaR discarded, with reasons
+    dpo_training_data.jsonl      preference pairs
+    rlvr_training_data.jsonl     prompts with computable rewards
+    rag_corpus.jsonl             retrieval records (routed documents)
+    vlm_training_data.jsonl      VLM samples (IFC inputs)
+    bim_elements.json            element catalogue
+    images/{bim_render,depth,site_photo}/
+```
 
 ### Document routing (train vs retrieve)
 
@@ -1433,6 +1499,17 @@ issuing body, document number, effective date and revision label.
 
 Still open: per-chunk routing (the decision is per document today), and
 supersession links between editions of the same regulation.
+
+### v0.5.1 — STaR filtering and RLVR export
+
+- `src/verifiers.py` checks a generated answer against its source by rule:
+  measured values and article references must occur in the text, refusal tasks
+  must decline. Which checks run depends on the task type.
+- `--dataset star` keeps the samples that verify and records why the rest were
+  dropped; `--star-min-score` sets the bar.
+- `--dataset rlvr` exports prompts with their source and checks so an RL loop
+  can compute the reward without a judge model.
+- `--dataset all` now covers SFT, DAPT, DPO, STaR and RLVR.
 
 ### v0.5.0 — SFT task mix, document routing, DPO
 
