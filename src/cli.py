@@ -208,6 +208,14 @@ def _parse_args(defaults) -> argparse.Namespace:
 
     # ── Misc ──────────────────────────────────────────────────────────────
     parser.add_argument(
+        "--doc-routing",
+        default=defaults.doc_routing,
+        choices=["train", "retrieve", "both", "auto"],
+        help="Where documents go: 'train' (all to SFT/DAPT), 'retrieve' (all to "
+             "the RAG corpus), 'both', or 'auto' (score each document — amended "
+             "regulations and forms are routed to retrieval).",
+    )
+    parser.add_argument(
         "--sft-tasks",
         default="",
         metavar="NAMES",
@@ -280,6 +288,7 @@ def _build_config(args: argparse.Namespace, base):
     cfg.ifc_render_width = args.render_size
     cfg.ifc_render_height = args.render_size
     cfg.raft_distractors = args.raft_distractors
+    cfg.doc_routing = args.doc_routing
     if args.dpo_rejections:
         cfg.dpo_rejection_kinds = [k.strip() for k in args.dpo_rejections.split(",") if k.strip()]
     if args.sft_tasks:
