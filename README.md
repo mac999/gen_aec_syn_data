@@ -106,6 +106,8 @@ screen, edit the generation options and re-run without leaving the browser.
 | **Config & Secrets**   | `config.json` defaults + `--config`/`--save-config`; API keys loaded from `.env`        |
 | **Graceful Fallback**  | Pipeline continues even when a backend or ComfyUI is unreachable                              |
 | **CLI**                | Full`argparse` CLI with per-file targeting, dry-run, and config save/load                   |
+| **SFT task mix**       | Seven task types across open-book, closed-book and RAFT retrieval modes                     |
+| **DPO**                | Preference pairs constructed from the source, not model-judged                               |
 | **Review Webview**     | `--webview` — Flask dataset browser: PDF / IFC 3D viewers, dataset preview, Excel export      |
 | **Local-first**        | Ollama / llama-server keep all data on-machine; Gemini backend is opt-in cloud               |
 
@@ -689,12 +691,94 @@ python main.py --dataset dapt --backend none --pdf input/regulation.pdf
 
 # Both in a single pass
 python main.py --dataset both --pdf input/regulation.pdf
+
+# DPO — SFT plus preference pairs derived from those samples
+python main.py --dataset dpo --pdf input/regulation.pdf
+
+# Everything: SFT + DAPT + DPO
+python main.py --dataset all --pdf input/regulation.pdf
 ```
 
 > For a PDF named `regulation.pdf`, SFT records are written to
 > `output/regulation/sllm_training_data.jsonl` and DAPT records to
 > `output/regulation/dapt_training_data.jsonl` — one folder per input file,
 > one file per dataset kind.
+
+### SFT task types and retrieval modes
+
+Earlier versions emitted a single task (`regulation_qa`) that always carried
+the source clause in the prompt. That teaches extraction from supplied text:
+the model learns to summarise what it is handed and little else. Volatile
+facts — clause numbers, thresholds — are better retrieved at run time than
+memorised, while stable behaviour — procedure, terminology, document
+structure, declining without support — belongs in the weights.
+
+`sft_tasks` splits generation along that line. Each task declares a
+**retrieval mode** that decides what context its prompt carries:
+
+| Mode | Prompt contains | Teaches |
+|---|---|---|
+| `open_book` | the source chunk | reading comprehension |
+| `closed_book` | document name only, no text | parametric recall |
+| `raft` | the source chunk plus distractor passages | using retrieval robustly |
+
+The `raft` mode follows RAFT (Zhang et al., 2024): the answering passage sits
+among unrelated ones from the same document, so the model is trained to pick
+the relevant one rather than trust whatever it receives.
+
+Default task mix (weights spread chunks deterministically):
+
+| Task | Mode | Weight | Purpose |
+|---|---|---|---|
+| `regulation_qa` | open_book | 2.0 | clause question answering |
+| `grounded_rag` | raft | 1.5 | answer from the right passage, ignore the rest |
+| `procedure` | open_book | 1.0 | ordered steps, actors, triggers |
+| `terminology` | closed_book | 1.0 | terms, synonyms, confusable pairs |
+| `reasoning` | open_book | 1.0 | multi-step application of a clause |
+| `refusal` | raft | 1.0 | decline when the passages do not support an answer |
+| `structure` | open_book | 0.5 | article/paragraph references |
+
+```bash
+# Generate a subset only
+python main.py --sft-tasks regulation_qa,refusal,grounded_rag --pdf input/reg.pdf
+
+# More distractor passages in raft prompts (default 3)
+python main.py --raft-distractors 5 --pdf input/reg.pdf
+```
+
+Set `sft_tasks` in `config.json` to replace the default mix; each entry takes
+`{name, retrieval, template, weight}`. An empty list uses the defaults. A
+single `open_book` entry reproduces the pre-v0.5 behaviour.
+
+### DPO preference pairs
+
+DPO trains on `(prompt, chosen, rejected)` triples without a reward model.
+Rejections here are **constructed from the accepted answer**, not judged by a
+model, so each contrast is verifiable against the source:
+
+| Kind | Rejected side | Failure mode it targets |
+|---|---|---|
+| `unsupported` | the same claim with clause citations removed | asserting without evidence |
+| `fabricated` | one measured threshold altered (units only, never article numbers) | inventing numbers |
+| `overreach` | a confident answer where declining was correct | answering unsupported questions |
+
+```bash
+python main.py --dataset dpo --pdf input/regulation.pdf
+python main.py --dataset dpo --dpo-rejections unsupported,fabricated --pdf input/reg.pdf
+```
+
+Output goes to `output/<stem>/dpo_training_data.jsonl` alongside the SFT file.
+Pairs are derived from the SFT samples generated in the same run, so `--dataset
+dpo` implies SFT generation.
+
+### VLM task types
+
+`vlm_tasks` in `config.json` is a list; each entry declares `task_type`,
+`images` (`bim`, `site`, or both), `instruction`, and `labels`. Two of the
+defaults target hallucination rather than description: `absence_check` asks
+about elements that may not be in the frame, and `spatial_relation` asks only
+for relationships visible on screen. Add or remove entries to change the mix —
+no code change is needed.
 
 ### Gemini backend (cloud)
 
@@ -1279,37 +1363,19 @@ IFC mesh ─┬─► z-buffer ─► colour render ─────────�
 ## Roadmap
 
 Planned work, in rough priority order. Items describe known limits of the
-current pipeline and the direction for fixing them — none of this is
-implemented yet.
+current pipeline and the direction for fixing them.
 
-### 1. Per-use-case SFT task types
+### 1. Per-use-case SFT task types — done
 
-**Limitation today.** Every SFT sample is emitted with
-`task_type: "regulation_qa"`. The field exists on the schema and its docstring
-already names `numeric_judgment` and `risk_description`
-(`src/schemas.py`), but nothing can populate it: the engine falls back to a
-literal default (`src/sllm_sft_engine.py`), and the JSON schema embedded in
-`sft_prompt_template` never asks the model for a `task_type`. A census of
-generated data confirms it — 4,765 sampled records, 100 % `regulation_qa`.
+Implemented as `sft_tasks` with three retrieval modes; see
+[SFT task types and retrieval modes](#sft-task-types-and-retrieval-modes).
+Seven default tasks replace the single `regulation_qa` entry, and each sample
+records the task that generated it. Records written before this change carry
+`task_type: "regulation_qa"` and remain usable without regeneration.
 
-The VLM side already has what SFT lacks: `vlm_tasks` in `config.json` declares
-one entry per use case (`task_type`, `images`, `instruction`, `labels`) and
-emits a sample per task per render.
-
-**Plan.** Add a symmetric `sft_tasks` config array so a single corpus can yield
-several instruction styles, each with its own prompt template, its own allowed
-`final_label` set, and its own share of the per-chunk budget. Candidate task
-types — to be confirmed against real downstream use cases, not fixed yet:
-
-| `task_type` | Use case | `final_label` candidates |
-|---|---|---|
-| `regulation_qa` | Clause definitions, procedures (current behaviour) | `answerable` / `unanswerable` |
-| `numeric_judgment` | Compliance verdicts on numeric criteria | `compliant` / `non_compliant` |
-| `risk_description` | Hazard identification, required safety measures | `answerable` / `unanswerable` |
-| `spec_comparison` | Cross-referencing criteria between specifications | `match` / `mismatch` / `unknown` |
-
-Existing datasets stay usable: every record already carries
-`task_type: "regulation_qa"`, so new task types mix in without regeneration.
+Still open from the original plan: per-task `final_label` vocabularies
+(`compliant` / `non_compliant` for numeric judgement, `match` / `mismatch`
+for specification comparison). Today every task shares one label set.
 
 ### 2. Split RAG-oriented documents out of the SFT corpus
 

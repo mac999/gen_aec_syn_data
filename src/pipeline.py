@@ -22,6 +22,7 @@ from typing import List, Optional
 from .config import PipelineConfig
 from .ifc_processor import IFCProcessor
 from .pdf_extractor import PDFExtractor
+from .dpo_engine import DPOEngine
 from .sllm_dapt_engine import SLLM_DAPT_Engine
 from .sllm_sft_engine import SLLM_SFT_Engine
 from .vlm_engine import VLMEngine
@@ -41,6 +42,7 @@ class AECPipeline:
         self.sllm_sft_engine = SLLM_SFT_Engine(config)
         self.sllm_dapt_engine = SLLM_DAPT_Engine(config)
         self.vlm_engine = VLMEngine(config)
+        self.dpo_engine = DPOEngine(config)
 
     def run(
         self,
@@ -134,6 +136,9 @@ class AECPipeline:
             return 0
 
         mode = self.config.dataset_mode
+        want_sft = mode in ("sft", "both", "dpo", "all")
+        want_dapt = mode in ("dapt", "both", "all")
+        want_dpo = mode in ("dpo", "all")
         logger.info(
             "[PDF] %d chunks extracted — starting sLLM synthesis (mode=%s)",
             len(chunks), mode,
@@ -141,8 +146,9 @@ class AECPipeline:
 
         stem = pdf_path.stem
         subdir = self.config.relative_subdir(pdf_path)
+        self.sllm_sft_engine.samples = []
         count = 0
-        if mode in ("sft", "both"):
+        if want_sft:
             try:
                 self.sllm_sft_engine.set_output_dir(
                     self.config.file_output_dir(stem, "sft", subdir))
@@ -151,7 +157,7 @@ class AECPipeline:
             except Exception as exc:
                 logger.error("[PDF] SFT engine error for '%s': %s", pdf_path.name, exc)
 
-        if mode in ("dapt", "both"):
+        if want_dapt:
             try:
                 self.sllm_dapt_engine.set_output_dir(
                     self.config.file_output_dir(stem, "dapt", subdir))
@@ -169,6 +175,16 @@ class AECPipeline:
                 logger.info("[PDF] DAPT → %s", self.sllm_dapt_engine.jsonl_path)
             except Exception as exc:
                 logger.error("[PDF] DAPT engine error for '%s': %s", pdf_path.name, exc)
+
+        if want_dpo and self.sllm_sft_engine.samples:
+            try:
+                self.dpo_engine.set_output_dir(
+                    self.config.file_output_dir(stem, "dpo", subdir))
+                count += self.dpo_engine.build_pairs(
+                    [s.to_jsonl_dict() for s in self.sllm_sft_engine.samples])
+                logger.info("[PDF] DPO -> %s", self.dpo_engine.jsonl_path)
+            except Exception as exc:
+                logger.error("[PDF] DPO engine error for '%s': %s", pdf_path.name, exc)
 
         logger.info("[PDF] Done '%s' — %d records generated", pdf_path.name, count)
         return count

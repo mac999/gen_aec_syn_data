@@ -75,9 +75,10 @@ def _parse_args(defaults) -> argparse.Namespace:
     parser.add_argument(
         "--dataset",
         default=defaults.dataset_mode,
-        choices=["sft", "dapt", "both"],
-        help="Which sLLM dataset(s) to generate from PDFs: "
-             "'sft' (QA pairs via LLM), 'dapt' (raw domain corpus, no LLM), or 'both'.",
+        choices=["sft", "dapt", "both", "dpo", "all"],
+        help="Which sLLM dataset(s) to generate from PDFs: 'sft' (QA pairs), "
+             "'dapt' (raw domain corpus, no LLM), 'both', 'dpo' (SFT plus "
+             "preference pairs derived from it), or 'all'.",
     )
 
     # ── LLM backend ───────────────────────────────────────────────────────
@@ -207,6 +208,26 @@ def _parse_args(defaults) -> argparse.Namespace:
 
     # ── Misc ──────────────────────────────────────────────────────────────
     parser.add_argument(
+        "--sft-tasks",
+        default="",
+        metavar="NAMES",
+        help="Comma-separated subset of the configured SFT task names "
+             "(default: all configured tasks).",
+    )
+    parser.add_argument(
+        "--raft-distractors",
+        type=int,
+        default=defaults.raft_distractors,
+        help="Passages added beside the answering one in raft-mode prompts.",
+    )
+    parser.add_argument(
+        "--dpo-rejections",
+        default="",
+        metavar="KINDS",
+        help="Comma-separated DPO rejection kinds: unsupported, fabricated, "
+             "overreach (default: all three).",
+    )
+    parser.add_argument(
         "--only-new",
         action="store_true",
         help="Process only input files with no dataset JSONL in the output tree yet. "
@@ -258,6 +279,17 @@ def _build_config(args: argparse.Namespace, base):
     cfg.ifc_views = args.ifc_views
     cfg.ifc_render_width = args.render_size
     cfg.ifc_render_height = args.render_size
+    cfg.raft_distractors = args.raft_distractors
+    if args.dpo_rejections:
+        cfg.dpo_rejection_kinds = [k.strip() for k in args.dpo_rejections.split(",") if k.strip()]
+    if args.sft_tasks:
+        from .sft_tasks import load_tasks  # noqa: PLC0415
+        wanted = {n.strip() for n in args.sft_tasks.split(",") if n.strip()}
+        chosen = [t for t in load_tasks(cfg.sft_tasks) if t.name in wanted]
+        if not chosen:
+            raise SystemExit(f"--sft-tasks matched no task: {sorted(wanted)}")
+        cfg.sft_tasks = [{"name": t.name, "retrieval": t.retrieval,
+                          "template": t.template, "weight": t.weight} for t in chosen]
     cfg.__post_init__()  # re-normalise Path fields after override
     return cfg
 
