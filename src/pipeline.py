@@ -22,8 +22,10 @@ from typing import List, Optional
 from .config import PipelineConfig
 from .ifc_processor import IFCProcessor
 from .pdf_extractor import PDFExtractor
+from .doc_routing import classify, extract_provenance
 from .dpo_engine import DPOEngine
 from .sllm_dapt_engine import SLLM_DAPT_Engine
+from .rag_engine import RAGEngine
 from .sllm_sft_engine import SLLM_SFT_Engine
 from .vlm_engine import VLMEngine
 
@@ -43,6 +45,7 @@ class AECPipeline:
         self.sllm_dapt_engine = SLLM_DAPT_Engine(config)
         self.vlm_engine = VLMEngine(config)
         self.dpo_engine = DPOEngine(config)
+        self.rag_engine = RAGEngine(config)
 
     def run(
         self,
@@ -139,6 +142,22 @@ class AECPipeline:
         want_sft = mode in ("sft", "both", "dpo", "all")
         want_dapt = mode in ("dapt", "both", "all")
         want_dpo = mode in ("dpo", "all")
+
+        # Routing decides whether this document trains, gets indexed, or both.
+        # Amended regulations memorised into weights go stale; the same text in
+        # a retrieval corpus is replaced by one reindex.
+        setting = self.config.doc_routing
+        if setting == "auto":
+            decision = classify(pdf_path, chunks[0].text if chunks else "",
+                                self.config.routing_threshold,
+                                self.config.routing_both_margin)
+        else:
+            decision = classify(pdf_path)
+            decision.route = setting if setting in ("train", "retrieve", "both") else "train"
+        if decision.route == "retrieve":
+            want_sft = want_dapt = want_dpo = False
+        logger.info("[PDF] route=%s score=%.1f %s",
+                    decision.route, decision.score, decision.signals)
         logger.info(
             "[PDF] %d chunks extracted — starting sLLM synthesis (mode=%s)",
             len(chunks), mode,
@@ -175,6 +194,17 @@ class AECPipeline:
                 logger.info("[PDF] DAPT → %s", self.sllm_dapt_engine.jsonl_path)
             except Exception as exc:
                 logger.error("[PDF] DAPT engine error for '%s': %s", pdf_path.name, exc)
+
+        if decision.route in ("retrieve", "both"):
+            try:
+                self.rag_engine.set_output_dir(
+                    self.config.file_output_dir(stem, "rag", subdir))
+                count += self.rag_engine.process_chunks(
+                    chunks, extract_provenance(pdf_path, chunks[0].text if chunks else ""),
+                    decision.as_metadata())
+                logger.info("[PDF] RAG -> %s", self.rag_engine.jsonl_path)
+            except Exception as exc:
+                logger.error("[PDF] RAG engine error for '%s': %s", pdf_path.name, exc)
 
         if want_dpo and self.sllm_sft_engine.samples:
             try:
