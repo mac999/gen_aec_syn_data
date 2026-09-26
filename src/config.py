@@ -122,8 +122,9 @@ class PipelineConfig:
     input_dir: Path = field(default_factory=lambda: Path("./input"))
     output_dir: Path = field(default_factory=lambda: Path("./output"))
 
-    # "sft" | "dapt" | "both" | "dpo" | "all". "dpo" derives preference
-    # pairs from the SFT samples produced in the same run.
+    # "sft" | "dapt" | "both" | "dpo" | "star" | "rlvr" | "all".
+    # dpo, star and rlvr all derive from the SFT samples of the same run,
+    # so each implies SFT generation.
     dataset_mode: str = "sft"
 
     # LLM backend 
@@ -397,6 +398,10 @@ class PipelineConfig:
     routing_threshold: float = 2.0
     routing_both_margin: float = 1.0
     rag_min_chars: int = 120
+
+    # STaR keeps only generations that verify against their source; RLVR
+    # exports the same checks as a computable reward for an RL loop.
+    star_min_score: float = 1.0
 
     # Processing limits
     max_samples_per_doc: int = 50
