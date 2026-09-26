@@ -89,6 +89,14 @@ TASK_VERIFIERS: Dict[str, List[str]] = {
 }
 
 
+def checks_for(task_type: str, overrides: Dict[str, List[str]] | None = None
+               ) -> List[str]:
+    """Which checks apply to *task_type*, config overrides winning."""
+    if overrides and task_type in overrides:
+        return list(overrides[task_type])
+    return TASK_VERIFIERS.get(task_type, ["length"])
+
+
 def verify(answer: str, source: str, task_type: str,
            names: List[str] | None = None) -> Verdict:
     """Run the checks for *task_type*; score is their mean."""

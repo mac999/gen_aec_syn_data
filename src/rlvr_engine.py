@@ -15,7 +15,7 @@ import logging
 from pathlib import Path
 from typing import Dict, List
 
-from .verifiers import TASK_VERIFIERS
+from .verifiers import checks_for
 
 logger = logging.getLogger("AEC_Pipeline.rlvr")
 
@@ -48,7 +48,8 @@ class RLVREngine:
                     # with the task rather than being looked up at train time.
                     "source": source,
                     "reference_answer": (sample.get("output") or {}).get("answer", ""),
-                    "verifiers": TASK_VERIFIERS.get(task_type, ["length"]),
+                    "verifiers": checks_for(
+                        task_type, self.config.star_task_verifiers),
                     "reward": {"type": "rule", "scale": [0.0, 1.0],
                                "aggregation": "mean"},
                     "source_doc_ids": sample.get("source_doc_ids", []),

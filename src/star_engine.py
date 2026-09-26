@@ -20,7 +20,7 @@ import logging
 from pathlib import Path
 from typing import Dict, List
 
-from .verifiers import verify
+from .verifiers import checks_for, verify
 
 logger = logging.getLogger("AEC_Pipeline.star")
 
@@ -52,7 +52,10 @@ class STaREngine:
                 source = ((sample.get("input") or {}).get("context") or "").strip()
                 if len(source) < 40:
                     source = "\n".join(chunk_text.values())
-                verdict = verify(answer, source, sample.get("task_type", ""))
+                task_type = sample.get("task_type", "")
+                verdict = verify(answer, source, task_type,
+                                 checks_for(task_type,
+                                            self.config.star_task_verifiers))
                 record = dict(sample)
                 record["verification"] = {
                     "score": round(verdict.score, 3),

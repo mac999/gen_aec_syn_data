@@ -34,6 +34,7 @@ The pipeline that ingests AEC source documents and 3D BIM models (IFC) to automa
   - [SFT task types and retrieval modes](#sft-task-types-and-retrieval-modes)
   - [DPO preference pairs](#dpo-preference-pairs)
   - [STaR filtering and RLVR export](#star-filtering-and-rlvr-export)
+  - [Customising prompts and models](#customising-prompts-and-models)
   - [Output files](#output-files)
 - [Dataset review webview](#dataset-review-webview)
 - [Output Schema](#output-schema)
@@ -936,6 +937,45 @@ The RL loop itself belongs to the training framework; this pipeline supplies
 the verifiable half. `--dataset all` runs SFT, DAPT, DPO, STaR and RLVR in one
 pass.
 
+### Customising prompts and models
+
+Everything a run generates from is declared in `config.json`, not in code —
+the same arrangement `vlm_tasks` already used. Editing the file changes the
+next run; the built-in values in `src/` are only the fallback when a field is
+left empty.
+
+| Field | What it controls |
+|---|---|
+| `sft_tasks` | the seven SFT tasks: name, retrieval mode, weight, prompt template |
+| `vlm_tasks` | VLM task instructions, which images each sees, allowed labels |
+| `sft_prompt_template` | the legacy single-task template (still honoured) |
+| `star_task_verifiers` | which checks each task's answers must pass |
+| `dpo_overreach_text` | the rejected answer used for the `overreach` pair |
+| `routing_signals` | volatility patterns and weights for `--doc-routing auto` |
+
+Each `sft_tasks` and `vlm_tasks` entry also takes an optional `model`, so a
+task can run on a different LLM than the run default — reasoning on a larger
+model, terminology on a cheaper one:
+
+```json
+"sft_tasks": [
+  {"name": "reasoning", "retrieval": "open_book", "weight": 1.0,
+   "model": "qwen3:30b-a3b", "verifiers": [],
+   "template": "... {n} ... {doc_id} ... {chunk_index} ... {text} ..."},
+  {"name": "terminology", "retrieval": "closed_book", "weight": 1.0,
+   "model": "qwen3:8b", "verifiers": ["length"],
+   "template": "..."}
+]
+```
+
+An empty `model` uses `ollama_model` (or `vlm_ollama_model` for VLM tasks).
+Templates must keep the `{n}`, `{doc_id}`, `{chunk_index}` and `{text}`
+placeholders and double any literal JSON braces. Closed-book tasks receive an
+empty `{text}`.
+
+The webview options panel edits these fields too, so a template can be changed
+and a run started without touching the file by hand.
+
 ### Output files
 
 Every dataset kind lands in one folder per input file, named after the input:
@@ -1560,6 +1600,16 @@ issuing body, document number, effective date and revision label.
 
 Still open: per-chunk routing (the decision is per document today), and
 supersession links between editions of the same regulation.
+
+### v0.5.2 — Prompts and models declared in config.json
+
+- `sft_tasks` now ships expanded in `config.json` with every template in full,
+  matching how `vlm_tasks` has always worked. The table in `src/sft_tasks.py`
+  is the fallback for an empty field, not the source of truth.
+- `sft_tasks` and `vlm_tasks` entries take an optional `model`, so individual
+  tasks can run on a different LLM than the run default.
+- `dpo_overreach_text`, `star_task_verifiers` and `routing_signals` moved out
+  of the modules into config as well.
 
 ### v0.5.1 — STaR filtering and RLVR export
 

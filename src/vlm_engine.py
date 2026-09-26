@@ -686,6 +686,8 @@ class VLMEngine:
                 instruction=instruction,
                 bim_context=bim_context,
                 labels=task.get("labels"),
+                # A task may name its own VLM; empty falls back to the run default.
+                model=str(task.get("model") or ""),
             )
 
             self._sample_counter += 1
@@ -711,6 +713,7 @@ class VLMEngine:
     def _make_output(
         self, task_type: str, image_paths: List[Path], instruction: str,
         bim_context: str, labels: Optional[List[str]] = None,
+        model: str = "",
     ) -> VLMOutput:
         """
         Produce output via the configured backend, mirroring the sLLM engine's
@@ -724,7 +727,7 @@ class VLMEngine:
         prompt = self._build_vlm_prompt(instruction, bim_context, labels)
         out: Optional[VLMOutput] = None
         if backend in ("ollama", "vlm"):
-            out = self._generate_output_via_ollama(image_paths, prompt)
+            out = self._generate_output_via_ollama(image_paths, prompt, model)
         elif backend == "gemini":
             out = self._generate_output_via_gemini(image_paths, prompt)
         elif backend not in ("template", "none", ""):
@@ -770,7 +773,7 @@ class VLMEngine:
         )
 
     def _generate_output_via_ollama(
-        self, image_paths: List[Path], prompt: str
+        self, image_paths: List[Path], prompt: str, model: str = ""
     ) -> Optional[VLMOutput]:
         """Call the Ollama vision model (/api/chat). None on any failure."""
         try:
@@ -784,7 +787,7 @@ class VLMEngine:
         base_url = self.config.vlm_ollama_base_url or self.config.ollama_base_url
         url = f"{base_url.rstrip('/')}/api/chat"
         payload = {
-            "model": self.config.vlm_ollama_model,
+            "model": model or self.config.vlm_ollama_model,
             "stream": False,
             "format": "json",
             "messages": [{"role": "user", "content": prompt, "images": images_b64}],

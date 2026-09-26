@@ -402,6 +402,20 @@ class PipelineConfig:
     # STaR keeps only generations that verify against their source; RLVR
     # exports the same checks as a computable reward for an RL loop.
     star_min_score: float = 1.0
+    # Which checks each task's answers must pass. Empty -> verifiers.TASK_VERIFIERS.
+    star_task_verifiers: dict = field(default_factory=dict)
+
+    # Rejected answer used for the "overreach" DPO kind: confident phrasing
+    # where the correct behaviour was to decline.
+    dpo_overreach_text: str = (
+        "제시된 조문에 따르면 해당 기준은 일반적으로 적용되며, "
+        "관련 규정에서 정한 값을 따르면 됩니다."
+    )
+
+    # Volatility signals for --doc-routing auto. Empty -> the built-in table
+    # in doc_routing.py. Each entry: {name, weight, pattern}; positive weight
+    # argues for retrieval, negative for training.
+    routing_signals: list = field(default_factory=list)
 
     # Processing limits
     max_samples_per_doc: int = 50
