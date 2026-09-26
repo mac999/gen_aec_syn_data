@@ -17,7 +17,9 @@ from typing import Dict, List
 
 _UNITS = (r"(?:mm|cm|m|km|%|퍼센트|kg|t|톤|MPa|N|kN|℃|도|분|시간|일|개월|년|배|회|명|개|인)")
 _MEASURED = re.compile(r"(?<!제)(?<![0-9.])(\d+(?:\.\d+)?)\s*(?=" + _UNITS + ")")
-_ARTICLE = re.compile(r"제\s*\d+\s*조(?:의\s*\d+)?")
+# Two citation conventions occur in this corpus: statutes number articles
+# ("제3조"), while design standards use dotted section numbers ("232.3.1").
+_ARTICLE = re.compile(r"제\s*\d+\s*조(?:의\s*\d+)?|\d+(?:\.\d+){1,3}")
 _REFUSAL = re.compile(r"확인할 수 없|답할 수 없|제시된.*없|근거가 없|알 수 없")
 
 
