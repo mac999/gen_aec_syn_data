@@ -399,6 +399,12 @@ class PipelineConfig:
     routing_both_margin: float = 1.0
     rag_min_chars: int = 120
 
+    # Reuse images that already exist on disk instead of regenerating them.
+    # Renders are cheap but diffusion photographs are not — a corpus takes
+    # days of GPU time — so a rerun for the text datasets should not redo
+    # them. Matching is by output filename, which is deterministic.
+    reuse_images: bool = False
+
     # STaR keeps only generations that verify against their source; RLVR
     # exports the same checks as a computable reward for an RL loop.
     star_min_score: float = 1.0

@@ -31,7 +31,7 @@ GROUPS: List[tuple] = [
              "ocr_use_gpu", "ocr_max_pages"]),
     ("ifc", ["ifc_render_width", "ifc_render_height", "ifc_views",
              "ifc_view_angles", "ifc_max_elements",
-             "ifc_min_elements_per_group"]),
+             "ifc_min_elements_per_group", "reuse_images"]),
     ("vlm", ["vlm_output_backend", "vlm_ollama_model", "vlm_ollama_base_url",
              "vlm_output_temperature", "vlm_output_timeout",
              "vlm_context_max_elements", "vlm_write_bim_catalog",
