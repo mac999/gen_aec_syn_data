@@ -213,7 +213,7 @@ class SLLM_DAPT_Engine:
             id=self._next_id(),
             doc_id=chunk.doc_id,
             source_type=meta.get("source_type", ""),
-            source_name=meta.get("source_name", chunk.doc_id),
+            source_name=meta.get("source_name") or chunk.doc_id,
             source_org=meta.get("source_org", ""),
             source_date=meta.get("source_date", ""),
             language=meta.get("language", "ko"),
