@@ -184,6 +184,9 @@ class SLLM_SFT_Engine:
 
         self._tasks = load_tasks(getattr(config, "sft_tasks", None))
         self._task_of_chunk: dict = {}
+        # The task object, not just its name: the writer needs the retrieval
+        # mode to decide whether an empty context is correct or a loss.
+        self._task_obj_of_chunk: dict = {}
         self._llm_by_model: dict = {}
         # Kept so the DPO stage can derive preference pairs from this run
         # without re-reading the JSONL.
@@ -288,6 +291,28 @@ class SLLM_SFT_Engine:
 
     # ── Retry wrapper ───────────────────────────────────────────────────────
 
+    def _context_for(self, chunk: DocumentChunk, inp: dict) -> str:
+        """
+        The passage the sample carries.
+
+        The schema invites the model to return `"context": ""`, and it takes
+        the invitation: a `.get` with a default never fires on a key that is
+        present and empty, so open-book and RAFT samples were written with no
+        passage at all. An open-book pair without its clause teaches nothing
+        about reading supplied text, and a RAFT pair without distractors is
+        not a RAFT pair.
+
+        Closed book is the one mode where an empty context is correct, so the
+        fallback is applied only where the task says it should be.
+        """
+        given = (inp.get("context") or "").strip()
+        if given:
+            return given
+        task = self._task_obj_of_chunk.get(chunk.chunk_index)
+        if task is None or task.renders_context():
+            return chunk.text[:500]
+        return ""
+
     def _synthesise_with_retry(self, chunk: DocumentChunk,
                                pool: Optional[List[DocumentChunk]] = None
                                ) -> List[SFTSample]:
@@ -295,6 +320,7 @@ class SLLM_SFT_Engine:
         task = None if negative else select_task(self._tasks, chunk.chunk_index)
         prompt_text = self._render_prompt(chunk, negative, task, pool)
         self._task_of_chunk[chunk.chunk_index] = task.name if task else "negative"
+        self._task_obj_of_chunk[chunk.chunk_index] = task
         last_error: Optional[Exception] = None
         for attempt in range(1, self.config.llm_max_retries + 1):
             try:
@@ -490,7 +516,7 @@ class SLLM_SFT_Engine:
             else:
                 evidence = [
                     EvidenceBlock(
-                        doc_id=e.get("doc_id", chunk.doc_id),
+                        doc_id=e.get("doc_id") or chunk.doc_id,
                         section=e.get("section", ""),
                     )
                     for e in out.get("evidence", [])
@@ -507,7 +533,7 @@ class SLLM_SFT_Engine:
                 source_doc_ids=data.get("source_doc_ids", [chunk.doc_id]),
                 instruction=data.get("instruction", ""),
                 input=SFTInput(
-                    context=inp.get("context", chunk.text[:500]),
+                    context=self._context_for(chunk, inp),
                     metadata=SFTInputMetadata(
                         project_type=inp_meta.get("project_type", "건축"),
                         language=inp_meta.get("language", "ko"),
