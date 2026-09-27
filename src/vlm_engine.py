@@ -305,6 +305,12 @@ class VLMEngine:
         """
         Try ComfyUI synthesis; fall back to a direct copy of the BIM render.
         """
+        if self.config.reuse_images:
+            existing = self.site_photo_dir / f"{render_path.stem}_site.png"
+            if existing.exists():
+                logger.debug("Reused site photo: %s", existing.name)
+                return existing
+
         if self._is_comfyui_available():
             result = self._run_comfyui(
                 render_path,

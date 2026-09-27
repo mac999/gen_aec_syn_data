@@ -245,6 +245,15 @@ def _parse_args(defaults) -> argparse.Namespace:
              "overreach (default: all three).",
     )
     parser.add_argument(
+        "--reuse-images",
+        action="store_true",
+        default=None,
+        help="Reuse renders, depth maps and site photographs already on disk "
+             "instead of regenerating them. Text datasets are still rebuilt, "
+             "so a rerun costs minutes rather than the days the diffusion "
+             "stage takes.",
+    )
+    parser.add_argument(
         "--only-new",
         action="store_true",
         help="Process only input files with no dataset JSONL in the output tree yet. "
@@ -299,6 +308,8 @@ def _build_config(args: argparse.Namespace, base):
     cfg.raft_distractors = args.raft_distractors
     cfg.doc_routing = args.doc_routing
     cfg.star_min_score = args.star_min_score
+    if args.reuse_images is not None:
+        cfg.reuse_images = args.reuse_images
     if args.dpo_rejections:
         cfg.dpo_rejection_kinds = [k.strip() for k in args.dpo_rejections.split(",") if k.strip()]
     if args.sft_tasks:

@@ -489,6 +489,11 @@ class IFCProcessor:
 
             for view_name in self.config.ifc_views:
                 out_path = render_dir / f"{model_id}_{index}_{view_name}.png"
+                if self.config.reuse_images and out_path.exists():
+                    render_paths.append(out_path)
+                    depth_paths.append(self._reuse_depth(depth_dir, out_path))
+                    logger.debug("Reused render: %s", out_path.name)
+                    continue
                 try:
                     self._render_to_file(all_tris, group, view_name, out_path)
                     render_paths.append(out_path)
@@ -526,6 +531,11 @@ class IFCProcessor:
                 skipped_empty, len(list_group), model_id,
             )
         return render_paths, depth_paths
+
+    def _reuse_depth(self, depth_dir: Path, render_path: Path) -> Optional[Path]:
+        """Depth map matching an already-present render, or None."""
+        candidate = depth_dir / f"{render_path.stem}_depth.png"
+        return candidate if candidate.exists() else None
 
     def _write_depth_map(
         self,
