@@ -310,7 +310,10 @@ class SLLM_SFT_Engine:
             return given
         task = self._task_obj_of_chunk.get(chunk.chunk_index)
         if task is None or task.renders_context():
-            return chunk.text[:500]
+            # capped the same way the prompt path caps it, and by the same
+            # config field -- a literal here silently cut up to 200 chars off
+            # the passage whenever chunk_max_size was above 500
+            return chunk.text[: self.config.chunk_max_size]
         return ""
 
     def _synthesise_with_retry(self, chunk: DocumentChunk,
