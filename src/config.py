@@ -158,6 +158,19 @@ class PipelineConfig:
     llama_server_url: str = "http://localhost:8080"
 
     # Chunking
+    # Which files count as documents. PDF alone was hard-coded, so a corpus
+    # distributed as plain text -- eCFR, for one -- could not be ingested
+    # without wrapping every section in a PDF first. Pages come from PyMuPDF
+    # for .pdf and from the file itself for the rest; chunking, filtering and
+    # everything downstream are shared.
+    input_extensions: tuple = (".pdf",)
+
+    # What counts as trainable prose. The filter that drops table-of-contents
+    # fragments counted Hangul characters, so an English corpus lost every
+    # chunk it produced -- 6 of 6 on the first file tried. The script and the
+    # threshold are settings; the defaults are the Korean behaviour unchanged.
+    informative_script: str = "\uac00-\ud7a3"      # Hangul syllables
+    informative_min_chars: int = 20
     chunk_min_size: int = 100
     chunk_max_size: int = 300
     chunk_overlap: int = 100

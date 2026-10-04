@@ -80,7 +80,9 @@ class AECPipeline:
         # meant for those files only — scanning input/ for the other type as
         # well turns "--ifc model.ifc" into a run over every PDF sitting there.
         explicit = pdf_files is not None or ifc_files is not None
-        pdfs = pdf_files or ([] if explicit else self._discover(self.config.input_dir, ".pdf"))
+        pdfs = pdf_files or ([] if explicit else
+                             [f for ext in self.config.input_extensions
+                              for f in self._discover(self.config.input_dir, ext)])
         ifcs = ifc_files or ([] if explicit else self._discover(self.config.input_dir, ".ifc"))
 
         logger.info("Found %d PDF(s) and %d IFC file(s) in %s",
