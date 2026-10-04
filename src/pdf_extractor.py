@@ -1,5 +1,6 @@
 from __future__ import annotations
 import logging
+import functools
 import re
 from pathlib import Path
 from typing import Iterator, List
@@ -60,20 +61,31 @@ def normalise_pdf_text(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 
 
-def is_informative(text: str, min_hangul: int = 20) -> bool:
+@functools.lru_cache(maxsize=8)
+def _script_re(script: str):
+    return re.compile("[%s]" % script)
+
+
+def is_informative(text: str, min_hangul: int = 20,
+                   script: str = "\uac00-\ud7a3") -> bool:
     """
     Reject chunks that carry no trainable prose.
 
     Table-of-contents fragments and page furniture survive chunking as strings
     of numbers and punctuation; they add noise to DAPT and make the SFT model
     invent questions no document can answer.
+
+    The script to count is a setting. Counting Hangul alone rejected every
+    chunk of an English corpus, which looked like a chunker failure and was a
+    filter one.
     """
     if len(text) < 40:
         return False
-    if len(_HANGUL_RE.findall(text)) < min_hangul:
+    rx = _script_re(script)
+    if len(rx.findall(text)) < min_hangul:
         return False
-    alnum_or_hangul = sum(c.isalnum() or "가" <= c <= "힣" for c in text)
-    return alnum_or_hangul / max(len(text), 1) >= 0.5
+    dense = sum(c.isalnum() or rx.match(c) is not None for c in text)
+    return dense / max(len(text), 1) >= 0.5
 
 
 class PDFExtractor:
@@ -90,27 +102,36 @@ class PDFExtractor:
             ImportError: if PyMuPDF is not installed.
             FileNotFoundError: if the PDF file does not exist.
         """
-        try:
-            import fitz  # PyMuPDF
-        except ImportError as exc:
-            raise ImportError(
-                "PyMuPDF is required: pip install PyMuPDF"
-            ) from exc
-
         if not pdf_path.exists():
-            raise FileNotFoundError(f"PDF not found: {pdf_path}")
+            raise FileNotFoundError(f"document not found: {pdf_path}")
 
         doc_id = pdf_path.stem
-        logger.info("Extracting text from PDF: %s", pdf_path.name)
-
         raw_pages: List[tuple[int, str]] = []  # (page_num, text)
-        with fitz.open(str(pdf_path)) as doc:
-            for page_num, page in enumerate(doc, start=1):
-                text = normalise_pdf_text(self._page_text(page))
-                if text.strip():
-                    raw_pages.append((page_num, text))
 
-        if not raw_pages and self.config.ocr_enabled:
+        if pdf_path.suffix.lower() != ".pdf":
+            # A text file is one page. Everything after this point -- joining,
+            # chunking, the non-informative filter -- is the same as for a PDF.
+            logger.info("Reading text document: %s", pdf_path.name)
+            text = normalise_pdf_text(pdf_path.read_text(encoding="utf-8",
+                                                         errors="replace"))
+            if text.strip():
+                raw_pages.append((1, text))
+        else:
+            try:
+                import fitz  # PyMuPDF
+            except ImportError as exc:
+                raise ImportError(
+                    "PyMuPDF is required: pip install PyMuPDF"
+                ) from exc
+
+            logger.info("Extracting text from PDF: %s", pdf_path.name)
+            with fitz.open(str(pdf_path)) as doc:
+                for page_num, page in enumerate(doc, start=1):
+                    text = normalise_pdf_text(self._page_text(page))
+                    if text.strip():
+                        raw_pages.append((page_num, text))
+
+        if not raw_pages and self.config.ocr_enabled and pdf_path.suffix.lower() == ".pdf":
             # Scanned PDF: no text layer at all. Rasterise and read the pages.
             # This runs only when the normal path found nothing, so the cost
             # falls on scanned files alone.
@@ -123,7 +144,9 @@ class PDFExtractor:
         full_text_with_pages = self._join_pages(raw_pages)
         chunks = list(self._chunk_text(doc_id, full_text_with_pages))
 
-        kept = [c for c in chunks if is_informative(c.text)]
+        kept = [c for c in chunks
+                if is_informative(c.text, self.config.informative_min_chars,
+                                  self.config.informative_script)]
         if len(kept) != len(chunks):
             logger.info(
                 "Dropped %d non-informative chunk(s) (TOC/page furniture) from '%s'",

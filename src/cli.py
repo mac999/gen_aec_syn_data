@@ -175,7 +175,7 @@ def _parse_args(defaults) -> argparse.Namespace:
         "--config",
         type=Path,
         metavar="JSON_PATH",
-        help="Load configuration from a JSON file (overrides config.json and other flags).",
+        help="Load configuration from a JSON file. Replaces config.json as the base; explicit CLI flags still win over it.",
     )
     parser.add_argument(
         "--save-config",
@@ -279,11 +279,16 @@ def _build_config(args: argparse.Namespace, base):
 
     if args.config:
         logger.info("Loading config from %s", args.config)
-        return PipelineConfig.from_json(args.config)
+        # The file replaces config.json as the base, not the command line.
+        # Returning here discarded --input-dir, --output-dir and --dataset,
+        # so a second dataset variant -- one config file per corpus, paths
+        # given per run -- could not be driven at all: the English corpus
+        # silently generated from the Korean input directory.
+        base = PipelineConfig.from_json(args.config)
 
     # Every CLI flag defaulted to the matching base value, so assigning them
     # back is a no-op unless the user explicitly overrode the flag. Config
-    # fields not exposed on the CLI keep their config.json values.
+    # fields not exposed on the CLI keep their config file values.
     cfg = base
     cfg.input_dir = args.input_dir
     cfg.output_dir = args.output_dir
@@ -362,10 +367,15 @@ def main() -> int:
         logger.info("Ollama model: %s", cfg.ollama_model)
         logger.info("ComfyUI URL : %s", cfg.comfyui_url)
 
-        pdfs = sorted(cfg.input_dir.glob("**/*.pdf")) if cfg.input_dir.exists() else []
+        # the same extensions the pipeline will discover, not .pdf alone --
+        # a dry run that reports zero documents for a corpus the real run
+        # would read is worse than no dry run
+        pdfs = sorted(f for ext in cfg.input_extensions
+                      for f in cfg.input_dir.glob("**/*%s" % ext)) \
+            if cfg.input_dir.exists() else []
         ifcs = sorted(cfg.input_dir.glob("**/*.ifc")) if cfg.input_dir.exists() else []
 
-        logger.info("PDF files found  : %d", len(pdfs))
+        logger.info("Document files   : %d", len(pdfs))
         for p in pdfs:
             logger.info("  %s", p)
         logger.info("IFC files found  : %d", len(ifcs))
