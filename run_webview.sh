@@ -57,6 +57,9 @@ fi
 # will not have it.
 if ! "$PY" -c "import flask" >/dev/null 2>&1; then
   echo "Installing webview dependencies (flask, openpyxl)..."
+  # Ubuntu system pythons ship a distutils-installed blinker 1.4 that pip
+  # refuses to uninstall, which aborts the flask install.
+  "$PY" -m pip install -q --ignore-installed "blinker>=1.6"
   "$PY" -m pip install -q "flask>=3.0" "openpyxl>=3.1"
 fi
 
