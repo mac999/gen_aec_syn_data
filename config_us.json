@@ -17,9 +17,9 @@
   "gemini_api_key": "",
   "gemini_model": "gemini-2.5-flash",
   "llama_server_url": "http://localhost:8080",
-  "chunk_min_size": 500,
-  "chunk_max_size": 700,
-  "chunk_overlap": 200,
+  "chunk_min_size": 800,
+  "chunk_max_size": 2400,
+  "chunk_overlap": 400,
   "space_gap_ratio": 0.2,
   "ocr_enabled": true,
   "ocr_languages": "ko,en",
@@ -308,5 +308,7 @@
     ".txt"
   ],
   "informative_script": "A-Za-z",
-  "informative_min_chars": 40
+  "informative_min_chars": 40,
+  "_comment_chunking": "Sized from the corpus: a 3-item enumeration block in Part 1926 runs 1,144 characters at the median against the 700 a Korean 각 호 list fits in, so 70% of blocks were cut across a chunk boundary and uc5 mined nothing. 2,400 holds 73% whole.",
+  "chunk_boundary": "(?<=[.;:])\\s+(?=[A-Z(])|\\n(?=\\s*\\([a-z0-9]{1,3}\\))"
 }
