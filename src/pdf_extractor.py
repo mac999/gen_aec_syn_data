@@ -388,21 +388,50 @@ class PDFExtractor:
                     buffer = ""
                     buffer_pages = []
                 pos = 0
+                bound = getattr(self.config, "chunk_boundary", "") or ""
+                brx = re.compile(bound) if bound else None
                 while pos < len(para_text):
                     end = min(pos + max_size, len(para_text))
+                    if brx and end < len(para_text):
+                        # Back off to the last boundary in the second half of
+                        # the window, so a chunk starts where a sentence does.
+                        window = para_text[pos:end]
+                        hits = [m.end() for m in brx.finditer(window)
+                                if m.end() > (max_size // 2)]
+                        if hits:
+                            end = pos + hits[-1]
                     yield self._make_chunk(doc_id, chunk_index, para_text[pos:end], [page_num])
                     chunk_index += 1
                     if end == len(para_text):
                         break
-                    pos = end - overlap
+                    # Step back by the overlap, then forward to the next
+                    # boundary: without this the next window opens inside the
+                    # sentence the overlap cut through, which is what made 81%
+                    # of chunks start mid-sentence even once the cut itself
+                    # was boundary-aligned.
+                    pos = max(0, end - overlap)
+                    if brx and pos > 0:
+                        nxt = brx.search(para_text, pos)
+                        if nxt and nxt.end() < end:
+                            pos = nxt.end()
                 continue
 
             if len(buffer) + len(para_text) + 1 > max_size and buffer:
                 # Emit the current buffer as a chunk
                 yield self._make_chunk(doc_id, chunk_index, buffer, buffer_pages)
                 chunk_index += 1
-                # Carry-over overlap from the end of the current buffer
+                # Carry-over overlap from the end of the current buffer. Cut
+                # at a boundary when one is configured: slicing a fixed number
+                # of characters starts the next chunk inside a sentence, and a
+                # miner that reads the phrase before a figure then takes half
+                # of one -- 81% of chunks from a federal rule began mid-sentence.
                 overlap_text = buffer[-overlap:] if overlap < len(buffer) else buffer
+                bound = getattr(self.config, "chunk_boundary", "") or ""
+                if bound and overlap < len(buffer):
+                    brx = re.compile(bound)
+                    starts = [m.end() for m in brx.finditer(overlap_text)]
+                    if starts:
+                        overlap_text = overlap_text[starts[0]:]
                 buffer = overlap_text + "\n" + para_text
                 buffer_pages = list(
                     dict.fromkeys(

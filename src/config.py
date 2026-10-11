@@ -165,6 +165,13 @@ class PipelineConfig:
     # everything downstream are shared.
     input_extensions: tuple = (".pdf",)
 
+    # Where an over-long paragraph may be cut. Fixed-width windows split
+    # mid-word -- 81% of chunks from a federal rule began inside a sentence,
+    # and a miner that reads the phrase before a figure then takes half of
+    # one ("to vehicular traffic, the vertical clearance"). Set to a sentence
+    # pattern to prefer the nearest boundary; empty keeps the fixed cut.
+    chunk_boundary: str = ""
+
     # What counts as trainable prose. The filter that drops table-of-contents
     # fragments counted Hangul characters, so an English corpus lost every
     # chunk it produced -- 6 of 6 on the first file tried. The script and the
