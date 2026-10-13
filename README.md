@@ -13,6 +13,12 @@ The pipeline that ingests AEC source documents and 3D BIM models (IFC) to automa
   <sub>VLM pipeline: BIM render → depth hint → synthesised site photo</sub>
 </p>
 
+<p align="center">
+  <a href="https://yvsq2ex8py2gf2-8050.proxy.runpod.net/"><b>Online demo &mdash; dataset review webview</b></a><br>
+  <sub>The demo runs on a paid GPU instance, so the URL is only kept active when a demo is scheduled.<br>
+  If it does not respond, the instance is stopped &mdash; contact the developer to have it brought up.</sub>
+</p>
+
 ---
 
 ## Table of Contents
