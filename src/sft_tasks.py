@@ -23,8 +23,11 @@ the defaults and validates whatever the config provides.
 """
 from __future__ import annotations
 
+import zlib
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+from .verifiers import checks_for, has_citation
 
 RETRIEVAL_MODES = ("open_book", "closed_book", "raft")
 
@@ -57,8 +60,13 @@ _RULES = (
     "Answer rules:\n"
     "- Each answer is 2-4 complete sentences and self-contained: state the rule, "
     "the condition it applies under, and the consequence or required action.\n"
-    "- Cite the clause number exactly as it is written in the passage "
-    "(e.g. 제12조, 제12조의2, 3.2.1). Use the same reference in evidence.section.\n"
+    "- The section or clause numbers this passage carries are: {sections}. "
+    "Name one of them inside the answer text itself, written exactly as "
+    "listed (e.g. \"1.2.2에 따르면 ...\", \"제12조의2에 따라 ...\"), and put the "
+    "same string in evidence.section. A reference that appears only in "
+    "evidence.section does not count. Never cite a number that is not in "
+    "the list; if the list says none, cite nothing and leave "
+    "evidence.section empty.\n"
     "- Copy numeric values and their units exactly as written in the passage. "
     "Never state a number that does not appear in the passage.\n"
     "- Vary the question style across the {n} pairs (definition, criterion, "
@@ -191,9 +199,9 @@ DEFAULT_SFT_TASKS: List[Dict[str, Any]] = [
             "general knowledge.\n"
             "- evidence is always the empty array [] and final_label is always "
             "\"unanswerable\".\n"
-            "- Set input.context to the passages exactly as given above.\n\n"
+            "- Leave input.context empty; the pipeline attaches the passages.\n\n"
             "Passages (doc_id={doc_id}, chunk={chunk_index}):\n---\n{text}\n---\n\n"
-            + _schema("<the passages exactly as given above>", "[]", "unanswerable")
+            + _schema("", "[]", "unanswerable")
         ),
     },
     {
@@ -208,11 +216,10 @@ DEFAULT_SFT_TASKS: List[Dict[str, Any]] = [
             "- Each answer starts by naming the supporting passage (e.g. "
             "\"[Passage 2]에 따르면\"), then gives the answer with its clause number.\n"
             "- Ignore the unrelated passages — do not mention their content.\n"
-            "- Set input.context to all passages exactly as given above, labels "
-            "included.\n"
+            "- Leave input.context empty; the pipeline attaches the passages.\n"
             "- final_label is always \"answerable\".\n\n"
             "Passages (doc_id={doc_id}, chunk={chunk_index}):\n---\n{text}\n---\n\n"
-            + _schema("<all passages exactly as given above>", _EVIDENCE, "answerable")
+            + _schema("", _EVIDENCE, "answerable")
         ),
     },
 ]
@@ -242,16 +249,35 @@ def load_tasks(raw: Any) -> List[SFTTask]:
     return tasks
 
 
-def select_task(tasks: List[SFTTask], index: int) -> SFTTask:
+def eligible_tasks(tasks: List[SFTTask], source: str,
+                   overrides: Optional[Dict[str, List[str]]] = None) -> List[SFTTask]:
+    """The tasks whose checks *source* can satisfy.
+
+    A chunk with no article or section number -- a form, a table, a notice --
+    cannot ground a citation, so a task that verifies citations would reject
+    every answer written from it. Those chunks go to the other tasks.
+    """
+    if has_citation(source):
+        return tasks
+    kept = [t for t in tasks
+            if "citations" not in (list(t.verifiers) or checks_for(t.name, overrides))]
+    return kept or tasks
+
+
+def select_task(tasks: List[SFTTask], index: int, doc_id: str = "") -> SFTTask:
     """Pick a task for chunk *index*, spread by weight without an RNG.
 
     Deterministic so a rerun produces the same mix; a chunk always maps to the
-    same task, which keeps --only-new reruns consistent.
+    same task, which keeps --only-new reruns consistent. The offset per
+    document matters because most documents are short: without it every one
+    of them would start on the same tasks and the last bands would only be
+    reached by long documents.
     """
     if not tasks:
         raise ValueError("no SFT tasks configured")
     total = sum(t.weight for t in tasks)
-    position = ((index * 997) % 10_000) / 10_000 * total  # 997: coprime stride
+    offset = zlib.crc32(doc_id.encode("utf-8")) % 10_000 if doc_id else 0
+    position = ((index * 997 + offset) % 10_000) / 10_000 * total  # 997: coprime stride
     upto = 0.0
     for task in tasks:
         upto += task.weight

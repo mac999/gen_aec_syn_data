@@ -33,7 +33,8 @@ from .config import (
     PipelineConfig,
 )
 from .raft import build_context
-from .sft_tasks import SFTTask, load_tasks, select_task
+from .sft_tasks import SFTTask, load_tasks, select_task, eligible_tasks
+from .verifiers import citations_in
 from .schemas import DocumentChunk, EvidenceBlock, SFTInput, SFTInputMetadata, SFTOutput, SFTSample
 
 
@@ -243,12 +244,17 @@ class SLLM_SFT_Engine:
             text = chunk.text[: self.config.chunk_max_size]
 
         self._context_of_chunk[chunk.chunk_index] = text
+        # The references the verifier will accept, named in the prompt so the
+        # model does not have to guess them from a passage that may only
+        # carry its section number in the heading line.
+        sections = ", ".join(citations_in(chunk.text)) or "none"
         try:
             return template.format(
                 doc_id=chunk.doc_id,
                 chunk_index=chunk.chunk_index,
                 n=self.config.qa_per_chunk,
                 text=text,
+                sections=sections,
             )
         except (KeyError, IndexError, ValueError) as exc:
             kind = "negative" if negative else "positive"
@@ -331,7 +337,10 @@ class SLLM_SFT_Engine:
                                pool: Optional[List[DocumentChunk]] = None
                                ) -> List[SFTSample]:
         negative = self._is_negative_chunk(chunk)
-        task = None if negative else select_task(self._tasks, chunk.chunk_index)
+        task = None if negative else select_task(
+            eligible_tasks(self._tasks, chunk.text,
+                           getattr(self.config, "star_task_verifiers", None)),
+            chunk.chunk_index, chunk.doc_id)
         prompt_text = self._render_prompt(chunk, negative, task, pool)
         self._task_of_chunk[chunk.chunk_index] = task.name if task else "negative"
         self._task_obj_of_chunk[chunk.chunk_index] = task
@@ -551,6 +560,7 @@ class SLLM_SFT_Engine:
                     metadata=SFTInputMetadata(
                         project_type=inp_meta.get("project_type", "건축"),
                         language=inp_meta.get("language", "ko"),
+                        chunk_index=chunk.chunk_index,
                     ),
                 ),
                 output=SFTOutput(
