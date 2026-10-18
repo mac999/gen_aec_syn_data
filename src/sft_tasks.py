@@ -29,17 +29,40 @@ from typing import Any, Dict, List
 RETRIEVAL_MODES = ("open_book", "closed_book", "raft")
 
 # {n}, {doc_id}, {chunk_index} are filled for every task; {text} only when the
-# mode supplies context. Keep the JSON schema identical across tasks so the
-# existing parser handles all of them.
-_SCHEMA = (
-    'Respond with valid JSON only, no markdown fence:\n'
-    '{{"qa_pairs": [{{"instruction": "<question in Korean>", '
-    '"input": {{"context": "<supporting text or empty>", '
-    '"metadata": {{"project_type": "<건축|교량|터널|도로|댐>", "language": "ko"}}}}, '
-    '"output": {{"answer": "<answer in Korean>", '
-    '"evidence": [{{"doc_id": "{doc_id}", "section": "<clause reference>"}}], '
-    '"final_label": "<compliant|non_compliant|answerable|unanswerable>"}}, '
-    '"domain_tags": ["<tag>", "<tag>"], "source_doc_ids": ["{doc_id}"]}}]}}'
+# mode supplies context. The JSON structure is identical across tasks so one
+# parser handles all of them; only the field hints vary, because they are the
+# strongest signal the model actually follows (a schema line saying "or empty"
+# beat the instruction above it every time in practice).
+def _schema(context_hint: str, evidence_hint: str, label_hint: str) -> str:
+    return (
+        'Respond with valid JSON only, no markdown fence:\n'
+        '{{"qa_pairs": [{{"instruction": "<question in Korean>", '
+        '"input": {{"context": "' + context_hint + '", '
+        '"metadata": {{"project_type": "<건축|교량|터널|도로|댐|기타>", "language": "ko"}}}}, '
+        '"output": {{"answer": "<answer in Korean>", '
+        '"evidence": ' + evidence_hint + ', '
+        '"final_label": "' + label_hint + '"}}, '
+        '"domain_tags": ["<tag>", "<tag>"], "source_doc_ids": ["{doc_id}"]}}]}}'
+    )
+
+
+_EVIDENCE = '[{{"doc_id": "{doc_id}", "section": "<clause number exactly as cited in the answer>"}}]'
+_CONTEXT = "<the sentences from the passage that support the answer, copied verbatim — never empty>"
+
+# Grounding rules shared by every task that sees source text. They mirror the
+# STaR verifiers (src/verifiers.py): a number or clause reference the checks
+# cannot find in the source gets the sample rejected, so the prompt demands
+# exactly what the checks will look for.
+_RULES = (
+    "Answer rules:\n"
+    "- Each answer is 2-4 complete sentences and self-contained: state the rule, "
+    "the condition it applies under, and the consequence or required action.\n"
+    "- Cite the clause number exactly as it is written in the passage "
+    "(e.g. 제12조, 제12조의2, 3.2.1). Use the same reference in evidence.section.\n"
+    "- Copy numeric values and their units exactly as written in the passage. "
+    "Never state a number that does not appear in the passage.\n"
+    "- Vary the question style across the {n} pairs (definition, criterion, "
+    "procedure, consequence).\n\n"
 )
 
 _HEAD = "You generate Korean AEC training data. Write questions and answers in Korean.\n\n"
@@ -70,8 +93,13 @@ DEFAULT_SFT_TASKS: List[Dict[str, Any]] = [
         "weight": 2.0,
         "template": _HEAD + (
             "Read the clause below and write {n} question-answer pairs that can be "
-            "answered from it alone. Each answer must cite a clause, table or figure.\n\n"
-            "Clause (doc_id={doc_id}, chunk={chunk_index}):\n---\n{text}\n---\n\n" + _SCHEMA
+            "answered from it alone.\n\n" + _RULES +
+            "final_label: \"answerable\" for definition/criterion/procedure questions; "
+            "\"compliant\" or \"non_compliant\" only when the question asks whether a "
+            "described action or design meets the clause. Never \"unanswerable\".\n\n"
+            "Clause (doc_id={doc_id}, chunk={chunk_index}):\n---\n{text}\n---\n\n"
+            + _schema(_CONTEXT, _EVIDENCE,
+                      "<answerable|compliant|non_compliant>")
         ),
     },
     {
@@ -81,10 +109,15 @@ DEFAULT_SFT_TASKS: List[Dict[str, Any]] = [
         "template": _HEAD + (
             "From the clause below, write {n} question-answer pairs about *procedure*: "
             "the order of steps, who performs them, what triggers each step, and what "
-            "must be submitted or recorded. Answer in ordered steps, not a single "
-            "sentence. Procedures outlive individual threshold values, so state the "
-            "process rather than quoting numbers.\n\n"
-            "Clause (doc_id={doc_id}, chunk={chunk_index}):\n---\n{text}\n---\n\n" + _SCHEMA
+            "must be submitted or recorded.\n\n" + _RULES +
+            "Procedure-specific rules:\n"
+            "- Write each answer as numbered steps (1. 2. 3.), naming the actor of "
+            "every step, then one closing sentence citing the clause.\n"
+            "- Procedures outlive individual threshold values, so describe the process; "
+            "quote a number only when it is essential and written in the passage.\n"
+            "- final_label is always \"answerable\".\n\n"
+            "Clause (doc_id={doc_id}, chunk={chunk_index}):\n---\n{text}\n---\n\n"
+            + _schema(_CONTEXT, _EVIDENCE, "answerable")
         ),
     },
     {
@@ -93,10 +126,15 @@ DEFAULT_SFT_TASKS: List[Dict[str, Any]] = [
         "weight": 1.0,
         "template": _HEAD + (
             "Using construction-domain knowledge, write {n} question-answer pairs that "
-            "explain the technical terms appearing in document '{doc_id}': what the term "
-            "means, the field synonyms and abbreviations for it, and how it differs from "
-            "a term it is often confused with. No clause text is supplied; answer from "
-            "domain knowledge and set final_label to 'answerable'.\n\n" + _SCHEMA
+            "explain technical terms from the domain of document '{doc_id}': what the "
+            "term means, the field synonyms and abbreviations for it, and how it differs "
+            "from a term it is often confused with.\n\n"
+            "Answer rules:\n"
+            "- Each answer is 2-4 complete sentences.\n"
+            "- No clause text is supplied, so do NOT cite clause numbers and do not "
+            "invent them: leave evidence.section empty and input.context empty.\n"
+            "- final_label is always \"answerable\".\n\n"
+            + _schema("", '[{{"doc_id": "{doc_id}", "section": ""}}]', "answerable")
         ),
     },
     {
@@ -106,9 +144,18 @@ DEFAULT_SFT_TASKS: List[Dict[str, Any]] = [
         "template": _HEAD + (
             "From the clause below, write {n} question-answer pairs that require "
             "*multi-step reasoning*: apply the clause to a concrete situation, compare "
-            "two conditions, or derive a consequence. Each answer must show the "
-            "intermediate steps before the conclusion.\n\n"
-            "Clause (doc_id={doc_id}, chunk={chunk_index}):\n---\n{text}\n---\n\n" + _SCHEMA
+            "two conditions, or derive a consequence.\n\n" + _RULES +
+            "Reasoning-specific rules:\n"
+            "- Each answer shows the intermediate steps before the conclusion: first "
+            "the applicable rule with its clause number, then how the situation meets "
+            "or fails each condition, then the conclusion.\n"
+            "- Every number used in the steps must come from the passage; do not "
+            "compute or assume values the passage does not state.\n"
+            "- final_label: \"compliant\" or \"non_compliant\" when the question judges "
+            "a described case; otherwise \"answerable\".\n\n"
+            "Clause (doc_id={doc_id}, chunk={chunk_index}):\n---\n{text}\n---\n\n"
+            + _schema(_CONTEXT, _EVIDENCE,
+                      "<answerable|compliant|non_compliant>")
         ),
     },
     {
@@ -118,9 +165,14 @@ DEFAULT_SFT_TASKS: List[Dict[str, Any]] = [
         "template": _HEAD + (
             "From the clause below, write {n} question-answer pairs about *document "
             "structure*: which article, paragraph or item states a given rule, what a "
-            "cross-reference points to, and how the provisions are organised. Answers "
-            "must name the reference path.\n\n"
-            "Clause (doc_id={doc_id}, chunk={chunk_index}):\n---\n{text}\n---\n\n" + _SCHEMA
+            "cross-reference points to, and how the provisions are organised.\n\n" + _RULES +
+            "Structure-specific rules:\n"
+            "- Answers must name the full reference path exactly as written in the "
+            "passage (e.g. 제12조 제2항 제1호, or 3.2.1), and only references that "
+            "appear in the passage.\n"
+            "- final_label is always \"answerable\".\n\n"
+            "Clause (doc_id={doc_id}, chunk={chunk_index}):\n---\n{text}\n---\n\n"
+            + _schema(_CONTEXT, _EVIDENCE, "answerable")
         ),
     },
     {
@@ -130,10 +182,18 @@ DEFAULT_SFT_TASKS: List[Dict[str, Any]] = [
         "template": _HEAD + (
             "Below are several passages. Only some relate to the question you will "
             "write. Produce {n} question-answer pairs where the question is plausible "
-            "for this domain but the passages do NOT contain the answer. Each answer "
-            "must state honestly that the supplied material does not support an answer. "
-            "Set evidence to [] and final_label to 'unanswerable'. Never invent facts.\n\n"
-            "Passages (doc_id={doc_id}, chunk={chunk_index}):\n---\n{text}\n---\n\n" + _SCHEMA
+            "for this domain but the passages do NOT contain the answer.\n\n"
+            "Answer rules:\n"
+            "- Begin every answer with the exact phrase "
+            "\"제시된 자료만으로는 확인할 수 없습니다.\" and then state in one sentence "
+            "what information would be needed to answer.\n"
+            "- Never invent facts, clause numbers or values. Do not answer from "
+            "general knowledge.\n"
+            "- evidence is always the empty array [] and final_label is always "
+            "\"unanswerable\".\n"
+            "- Set input.context to the passages exactly as given above.\n\n"
+            "Passages (doc_id={doc_id}, chunk={chunk_index}):\n---\n{text}\n---\n\n"
+            + _schema("<the passages exactly as given above>", "[]", "unanswerable")
         ),
     },
     {
@@ -142,10 +202,17 @@ DEFAULT_SFT_TASKS: List[Dict[str, Any]] = [
         "weight": 1.5,
         "template": _HEAD + (
             "Below are several passages; only some are relevant. Write {n} "
-            "question-answer pairs answerable from the relevant passages only. Each "
-            "answer must first say which passage supports it, then give the answer. "
-            "Ignore the unrelated passages — do not mention their content.\n\n"
-            "Passages (doc_id={doc_id}, chunk={chunk_index}):\n---\n{text}\n---\n\n" + _SCHEMA
+            "question-answer pairs answerable from the relevant passages only.\n\n"
+            + _RULES +
+            "RAG-specific rules:\n"
+            "- Each answer starts by naming the supporting passage (e.g. "
+            "\"[Passage 2]에 따르면\"), then gives the answer with its clause number.\n"
+            "- Ignore the unrelated passages — do not mention their content.\n"
+            "- Set input.context to all passages exactly as given above, labels "
+            "included.\n"
+            "- final_label is always \"answerable\".\n\n"
+            "Passages (doc_id={doc_id}, chunk={chunk_index}):\n---\n{text}\n---\n\n"
+            + _schema("<all passages exactly as given above>", _EVIDENCE, "answerable")
         ),
     },
 ]
