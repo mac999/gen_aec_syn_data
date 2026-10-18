@@ -21,6 +21,26 @@ _MEASURED = re.compile(r"(?<!제)(?<![0-9.])(\d+(?:\.\d+)?)\s*(?=" + _UNITS + ")
 # ("제3조"), while design standards use dotted section numbers ("232.3.1").
 _ARTICLE = re.compile(r"제\s*\d+\s*조(?:의\s*\d+)?|\d+(?:\.\d+){1,3}")
 _REFUSAL = re.compile(r"확인할 수 없|답할 수 없|제시된.*없|근거가 없|알 수 없")
+# What a chunk can be cited by. Stricter than _ARTICLE on purpose: a dotted
+# number only counts when it opens a line and a heading follows, so a date
+# ("2025.9.11") or a value ("1.5 MPa") does not make a chunk look citable.
+_DATE = re.compile(r"(?:19|20)\d\d\s*\.\s*\d{1,2}\s*\.\s*\d{1,2}")
+_HEADING = re.compile(r"제\s*\d+\s*조(?:의\s*\d+)?|(?:^|\n)[ \t]*(\d+(?:\.\d+){1,3})(?=\s+[가-힣A-Za-z(])")
+
+
+def citations_in(source: str) -> List[str]:
+    """The article and section numbers a chunk carries, in order, deduplicated."""
+    seen: List[str] = []
+    for m in _HEADING.finditer(_DATE.sub(" ", source)):
+        ref = (m.group(1) or m.group(0)).replace(" ", "").strip()
+        if ref not in seen:
+            seen.append(ref)
+    return seen
+
+
+def has_citation(source: str) -> bool:
+    """Whether the source carries an article or section number at all."""
+    return bool(citations_in(source))
 
 
 @dataclass

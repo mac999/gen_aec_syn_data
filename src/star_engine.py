@@ -47,11 +47,14 @@ class STaREngine:
                 answer = ((sample.get("output") or {}).get("answer") or "").strip()
                 if not answer:
                     continue
-                # Prefer the context the generator recorded; fall back to the
-                # chunk it came from when the model returned an empty context.
-                source = ((sample.get("input") or {}).get("context") or "").strip()
-                if len(source) < 40:
-                    source = "\n".join(chunk_text.values())
+                # The sentences the model copied plus the chunk they came
+                # from: a section number usually sits in the heading line,
+                # which the copied sentences leave out. Only a sample with
+                # no chunk index falls back to the whole document.
+                inp = sample.get("input") or {}
+                own = chunk_text.get((inp.get("metadata") or {}).get("chunk_index"))
+                parts = [p for p in ((inp.get("context") or "").strip(), own or "") if p]
+                source = "\n".join(parts) if parts else "\n".join(chunk_text.values())
                 task_type = sample.get("task_type", "")
                 verdict = verify(answer, source, task_type,
                                  checks_for(task_type,
