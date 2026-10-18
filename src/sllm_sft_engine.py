@@ -187,6 +187,11 @@ class SLLM_SFT_Engine:
         # The task object, not just its name: the writer needs the retrieval
         # mode to decide whether an empty context is correct or a loss.
         self._task_obj_of_chunk: dict = {}
+        # The context block each prompt actually carried. The fallback in
+        # _context_for must reproduce it: for RAFT that is the multi-passage
+        # block, and for the refusal task the golden chunk is deliberately
+        # absent from it — chunk.text would be exactly the wrong substitute.
+        self._context_of_chunk: dict = {}
         self._llm_by_model: dict = {}
         # Kept so the DPO stage can derive preference pairs from this run
         # without re-reading the JSONL.
@@ -237,6 +242,7 @@ class SLLM_SFT_Engine:
         else:
             text = chunk.text[: self.config.chunk_max_size]
 
+        self._context_of_chunk[chunk.chunk_index] = text
         try:
             return template.format(
                 doc_id=chunk.doc_id,
@@ -310,6 +316,11 @@ class SLLM_SFT_Engine:
             return given
         task = self._task_obj_of_chunk.get(chunk.chunk_index)
         if task is None or task.renders_context():
+            # The block the prompt actually carried — for RAFT the labelled
+            # multi-passage block, with the golden chunk absent on refusal.
+            rendered = self._context_of_chunk.get(chunk.chunk_index)
+            if rendered:
+                return rendered
             # capped the same way the prompt path caps it, and by the same
             # config field -- a literal here silently cut up to 200 chars off
             # the passage whenever chunk_max_size was above 500
