@@ -16,6 +16,7 @@ class EvidenceBlock(BaseModel):
 class SFTInputMetadata(BaseModel):
     project_type: str = Field(description="e.g. 교량, 건물, 터널")
     language: str = Field(default="ko", description="Language code, e.g. ko")
+    chunk_index: Optional[int] = Field(default=None, description="Source chunk within the document")
 
 
 class SFTInput(BaseModel):
