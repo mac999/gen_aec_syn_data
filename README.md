@@ -1084,6 +1084,16 @@ python main.py --save-config config.json
 python main.py --config config.json
 ```
 
+The settings that produced each released dataset are kept beside it:
+`config_v052.json` is the file the v0.5.2 dataset was generated with, and
+`config_v053.json` the current one. `config.json` is a copy of the latest
+of these, so a plain run and the benchmark's chunker (which reads
+`config.json`) use the same values. To reproduce a dataset, pass its file
+with `--config`; to make the next one, copy the latest file to a new version
+number, change it there, and copy it back over `config.json`. The dataset
+folder carries the same number (`train_data_v053/`), so the data and the
+settings that made it can be matched by name.
+
 ### All CLI options
 
 > Default values shown in brackets come from `config.json`; change them there to set new project-wide defaults.
@@ -1605,6 +1615,37 @@ issuing body, document number, effective date and revision label.
 
 Still open: per-chunk routing (the decision is per document today), and
 supersession links between editions of the same regulation.
+
+### v0.5.3 — Task mix fixes and versioned settings
+
+- The SFT task for a chunk is now offset per document. Before, the task was a
+  function of the chunk's index alone, so every short document started on the
+  same tasks and `structure` was never reached under the 50-sample cap: the
+  v0.5.2 run produced no `structure` rows at all.
+- A chunk with no article or section number (forms, tables, notices; 24% of
+  the corpus) is no longer given to a task whose verifier checks citations.
+  Those answers could never pass; the missing-citation check alone made up
+  73% of the v0.5.2 rejections.
+- The seven SFT prompts state the answer rules the verifiers check: clause
+  cited as written, 2-4 sentences, numbers copied from the passage, the
+  refusal phrase the refusal check looks for.
+- The prompt names the article and section numbers the chunk carries and asks
+  for one of them inside the answer text. Left to find them itself, the model
+  turned item labels like "(2)" into "제12조(2)" or cited nothing: 92% of
+  `regulation_qa` answers from a KCS specification were rejected before this,
+  3% after.
+- STaR verifies an answer against the sentences the model copied plus the
+  chunk it came from (samples now record `chunk_index`). The copied sentences
+  alone rarely include the heading line that holds the section number.
+- The RAFT prompts (`refusal`, `grounded_rag`) no longer ask the model to copy
+  every passage into `input.context`; the pipeline attaches the passages
+  itself. Copying them pushed replies past `ollama_num_predict` and half of
+  those calls came back as truncated, unparseable JSON.
+- `max_samples_per_doc` 50 to 500, `chunk_overlap` 200 to 100, temperature
+  0.1 to 0.5, `terminology` weight 1.0 to 0.5 (it is unverified beyond
+  length and was a third of the kept rows).
+- `config_v052.json` and `config_v053.json` keep the settings of each dataset
+  release; `config.json` mirrors the latest.
 
 ### v0.5.2 — Prompts and models declared in config.json
 
