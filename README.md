@@ -1646,6 +1646,11 @@ supersession links between editions of the same regulation.
   length and was a third of the kept rows).
 - `config_v052.json` and `config_v053.json` keep the settings of each dataset
   release; `config.json` mirrors the latest.
+- Measured on the full run (2026-10-20, 844 training-side documents, 30 h on a
+  GB10 at `llm_parallel 8`): 104,088 text rows and 3,458 VLM samples, STaR
+  acceptance 17,604 of 19,239 kept -- **91.5%**, against 38.4% under v0.5.2.
+  Every SFT task is now represented, including `structure`. JSON parse
+  failures went from 204 in a 150-sample pilot to zero.
 
 ### v0.5.2 — Prompts and models declared in config.json
 
