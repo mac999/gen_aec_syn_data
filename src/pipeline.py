@@ -190,6 +190,7 @@ class AECPipeline:
         stem = pdf_path.stem
         subdir = self.config.relative_subdir(pdf_path)
         self.sllm_sft_engine.samples = []
+        self.sllm_sft_engine.current_source_date = self._year_from_name(stem)
         count = 0
         if want_sft:
             try:

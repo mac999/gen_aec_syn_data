@@ -171,6 +171,10 @@ class SLLM_SFT_Engine:
         self._llm_lock = threading.Lock()      # guard lazy init
         self._counter_lock = threading.Lock()  # guard sample counter + file
         self._sample_counter = 0
+        self._doc_counters: dict = {}
+        # Year parsed from the source file name, set per document by the
+        # pipeline before process_chunks; stamped into each row.
+        self.current_source_date = ""
 
         # Resolve and validate the prompt templates once, up front — a bad
         # placeholder in a user-edited config.json should fail loudly here, not
@@ -301,8 +305,13 @@ class SLLM_SFT_Engine:
             refusal = template.format(doc=chunk.doc_id, section="해당").replace(
                 "의 해당 조문", " 원문")
         return SFTSample(
-            id=self._next_id(),
+            id=self._next_id(chunk.doc_id),
             task_type="refusal",
+            doc_id=chunk.doc_id,
+            chunk_index=chunk.chunk_index,
+            version=getattr(self.config, "generator_version", ""),
+            source_date=self.current_source_date,
+                source_date=self.current_source_date,
             domain_tags=list(source.domain_tags),
             source_doc_ids=list(source.source_doc_ids),
             instruction=source.instruction,
@@ -648,9 +657,12 @@ class SLLM_SFT_Engine:
                 ]
                 final_label = out.get("final_label", "answerable")
 
-            sample_id = self._next_id()
+            sample_id = self._next_id(chunk.doc_id)
             return SFTSample(
                 id=sample_id,
+                doc_id=chunk.doc_id,
+                chunk_index=chunk.chunk_index,
+                version=getattr(self.config, "generator_version", ""),
                 # The generating task, not whatever the model called it.
                 task_type=self._task_of_chunk.get(
                     chunk.chunk_index, data.get("task_type", "regulation_qa")),
@@ -675,8 +687,12 @@ class SLLM_SFT_Engine:
             logger.warning("Schema validation failed: %s", exc)
             return None
 
-    def _next_id(self) -> str:
+    def _next_id(self, doc_id: str = "") -> str:
         with self._counter_lock:
+            if doc_id:
+                n = self._doc_counters.get(doc_id, 0) + 1
+                self._doc_counters[doc_id] = n
+                return f"{doc_id}#{n}"
             self._sample_counter += 1
             return f"sft_{self._sample_counter:06d}"
 

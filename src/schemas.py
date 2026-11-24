@@ -36,7 +36,22 @@ class SFTOutput(BaseModel):
 
 
 class SFTSample(BaseModel):
-    id: str = Field(description="Unique sample ID, e.g. sft_000001")
+    id: str = Field(description="Stable sample ID, '<doc_key>#<n>' — per-"
+                                "document numbering survives reruns and "
+                                "partial regeneration, unlike a run-global "
+                                "counter that renumbers everything")
+    # Top-level provenance. Consumers (kcbench splitting, dedup, licence
+    # audits) had to parse source_doc_ids heuristically; these make the
+    # answer one field away.
+    doc_id: str = Field(default="", description="Source document stem")
+    chunk_index: Optional[int] = Field(
+        default=None, description="Chunk within the document")
+    source_date: str = Field(default="", description="Edition/effective year "
+                                                     "when known")
+    version: str = Field(default="", description="Generator release that "
+                                                 "wrote the row")
+    license: str = Field(default="unknown", description="Redistribution "
+                                                        "status of the source")
     task_type: str = Field(
         default="regulation_qa",
         description="Task category: regulation_qa | numeric_judgment | risk_description",

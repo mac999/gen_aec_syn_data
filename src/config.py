@@ -449,6 +449,10 @@ class PipelineConfig:
     # Empty string disables the filter.
     holdout_file: str = ""
 
+    # Stamped into every row's top-level `version` so a mixed directory of
+    # releases stays attributable row by row.
+    generator_version: str = ""
+
     star_min_score: float = 1.0
     # Upper bound on a task type's share of the verified STaR output, per
     # document, e.g. {"refusal": 0.08}. Empty dict disables the cap.
