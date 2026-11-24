@@ -33,6 +33,16 @@ def normalise_pdf_text(text: str) -> str:
     """
     text = _CTRL_RE.sub("", text.replace(" ", " "))
 
+    # Shadowed glyphs: outlined or drop-shadowed headings extract each
+    # character twice ("2년" -> "22년", "안전" -> "안안전전"), and the doubled
+    # token then defeats the numbers check and poisons DAPT verbatim. Collapse
+    # doubling only when at least three consecutive characters are doubled, so
+    # legitimate repeats ("1100년", "가가호호") survive.
+    def _fold_shadow(m: "re.Match[str]") -> str:
+        return re.sub(r"(.)\1", r"\1", m.group(0))
+
+    text = re.sub(r"(?:(.)\1){3,}", _fold_shadow, text)
+
     out: List[str] = []
     run: List[str] = []
 
@@ -330,6 +340,19 @@ class PDFExtractor:
         """
         merged: List[tuple[List[int], str]] = []
         for page_num, text in raw_pages:
+            # A sentence cut by the page break used to reach the chunker as
+            # two fragments: the previous page ends mid-sentence and this one
+            # opens mid-clause. Stitch the two pages when the boundary shows
+            # that pattern; both page numbers are kept on the merged block.
+            if merged:
+                prev_pages, prev_text = merged[-1]
+                tail = prev_text.rstrip()[-1:] if prev_text.rstrip() else ""
+                head = text.lstrip()[:1]
+                sentence_end = tail in ".!?\u3002\u300d\u300f\u201d)]"
+                if tail and head and not sentence_end:
+                    merged[-1] = (prev_pages + [page_num],
+                                  prev_text.rstrip() + " " + text.lstrip())
+                    continue
             merged.append(([page_num], text))
         return merged
 
