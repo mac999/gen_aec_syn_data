@@ -311,7 +311,6 @@ class SLLM_SFT_Engine:
             chunk_index=chunk.chunk_index,
             version=getattr(self.config, "generator_version", ""),
             source_date=self.current_source_date,
-                source_date=self.current_source_date,
             domain_tags=list(source.domain_tags),
             source_doc_ids=list(source.source_doc_ids),
             instruction=source.instruction,
