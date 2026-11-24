@@ -57,6 +57,16 @@ def _nums(text: str) -> List[str]:
     return [m.group(1) for m in _MEASURED.finditer(text)]
 
 
+def measured_values(text: str) -> List[str]:
+    """Public face of _nums for callers outside this module."""
+    return _nums(text)
+
+
+def cited_articles(text: str) -> List[str]:
+    """Article/section references the citation check would recognise."""
+    return [m.group(0).replace(" ", "") for m in _ARTICLE.finditer(text)]
+
+
 def verify_numbers(answer: str, source: str) -> Verdict:
     """Every measured value in the answer must appear in the source."""
     claimed = _nums(answer)
@@ -82,9 +92,26 @@ def verify_citations(answer: str, source: str) -> Verdict:
 
 
 def verify_refusal(answer: str, _source: str = "") -> Verdict:
-    """The answer must decline rather than assert."""
-    return Verdict(1.0, ["declined"]) if _REFUSAL.search(answer) \
-        else Verdict(0.0, ["did not decline"])
+    """The answer must decline rather than assert.
+
+    A refusal phrase alone is not enough: an answer that declines and then
+    states a measured value or cites an article is asserting after all, and
+    training on it teaches the model to hedge while answering. Such rows made
+    up 18.4% of the v0.5.3 STaR output and taught the tuned model to refuse
+    60% of items it could answer, so the check now rejects them.
+    """
+    if not _REFUSAL.search(answer):
+        return Verdict(0.0, ["did not decline"])
+    if _nums(answer):
+        return Verdict(0.0, ["declined but states a value"])
+    # A citation is allowed only as a pointer to the missing source
+    # ("…제3조 조문이 필요합니다"); a citation used to assert content
+    # ("…제3조에 의하면 가능하다") is answering after all.
+    for m in _ARTICLE.finditer(answer):
+        tail = answer[m.end():m.end() + 18]
+        if not re.search(r"필요|주(?:십시오|세요)|참조", tail):
+            return Verdict(0.0, ["declined but cites an article"])
+    return Verdict(1.0, ["declined"])
 
 
 def verify_length(answer: str, _source: str = "", minimum: int = 20) -> Verdict:
