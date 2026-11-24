@@ -35,13 +35,18 @@ def normalise_pdf_text(text: str) -> str:
 
     # Shadowed glyphs: outlined or drop-shadowed headings extract each
     # character twice ("2년" -> "22년", "안전" -> "안안전전"), and the doubled
-    # token then defeats the numbers check and poisons DAPT verbatim. Collapse
-    # doubling only when at least three consecutive characters are doubled, so
-    # legitimate repeats ("1100년", "가가호호") survive.
-    def _fold_shadow(m: "re.Match[str]") -> str:
-        return re.sub(r"(.)\1", r"\1", m.group(0))
+    # token then defeats the numbers check and poisons DAPT verbatim. A line
+    # is folded only when most of it is doubled pairs — prose that merely
+    # contains a legitimate repeat ("1100년", "가가호호") stays untouched,
+    # because the rest of the line is normal text.
+    def _fold_shadow_line(line: str) -> str:
+        pairs = re.findall(r"(.)\1", line)
+        dense = sum(1 for c in line if not c.isspace())
+        if dense >= 6 and (2 * len(pairs)) / dense >= 0.6:
+            return re.sub(r"(.)\1", r"\1", line)
+        return line
 
-    text = re.sub(r"(?:(.)\1){3,}", _fold_shadow, text)
+    text = "\n".join(_fold_shadow_line(l) for l in text.splitlines())
 
     out: List[str] = []
     run: List[str] = []
