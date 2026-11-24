@@ -29,6 +29,7 @@ class STaREngine:
     def __init__(self, config) -> None:
         self.config = config
         self.jsonl_path = Path(config.output_dir) / "star_training_data.jsonl"
+        self.kept_records: List[dict] = []
         self.rejects_path = Path(config.output_dir) / "star_rejected.jsonl"
 
     def set_output_dir(self, out_dir: Path) -> None:
@@ -100,6 +101,9 @@ class STaREngine:
             for record in passed:
                 ok.write(json.dumps(record, ensure_ascii=False) + "\n")
                 kept += 1
+            # Exposed for the DPO stage: preference pairs built from rows
+            # that failed verification would prefer wrong chosen answers.
+            self.kept_records = list(passed)
         if kept or rejected:
             logger.info("STaR: kept %d, rejected %d (min_score=%.2f) -> %s",
                         kept, rejected, threshold, self.jsonl_path)

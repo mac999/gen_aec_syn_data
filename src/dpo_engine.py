@@ -37,9 +37,16 @@ _DROP_EVIDENCE = (
 )
 
 
+# Units whose values identify rather than measure. Perturbing "2024년" or
+# "제2회" produces a rejected answer that is wrong in an uninteresting way —
+# the pair teaches date trivia, not grounded measurement.
+_IDENTITY_UNITS = re.compile(r"^\s*(?:년|회|차)")
+
+
 def _perturb_number(text: str, rng: random.Random) -> Optional[str]:
-    """Return *text* with one number changed, or None if it holds none."""
-    matches = list(_NUM.finditer(text))
+    """Return *text* with one measured value changed, or None if it has none."""
+    matches = [m for m in _NUM.finditer(text)
+               if not _IDENTITY_UNITS.match(text[m.end():])]
     if not matches:
         return None
     m = rng.choice(matches)
@@ -87,10 +94,20 @@ class DPOEngine:
             logger.info("DPO pairs written: %d -> %s", written, self.jsonl_path)
         return written
 
+    # Lines that are headings or leaders rather than prose: "3.2 일반사항",
+    # "제4장 안전관리 ……… 12". Three or more such lines mark a table-of-
+    # contents answer, which makes a meaningless chosen side.
+    _TOC_LINE = re.compile(
+        r"^\s*(?:제?\s*\d+(?:[.]\d+)*\s*[장절조항호]?\s+\S{1,30}"
+        r"(?:\s*[.\u2026]{2,}\s*\d+)?)\s*$")
+
     def _pairs_for(self, sample: dict, kinds: List[str]) -> List[dict]:
         output = sample.get("output") or {}
         answer = (output.get("answer") or "").strip()
         if not answer:
+            return []
+        lines = [l for l in answer.split("\n") if l.strip()]
+        if sum(1 for l in lines if self._TOC_LINE.match(l)) >= 3:
             return []
         label = output.get("final_label", "answerable")
         context = ((sample.get("input") or {}).get("context") or "").strip()
@@ -115,7 +132,15 @@ class DPOEngine:
     def _reject(self, kind: str, answer: str, label: str) -> Optional[str]:
         if kind == "unsupported":
             stripped = _strip_citation(answer)
-            return stripped if stripped != answer else None
+            if stripped == answer:
+                return None
+            # Stripping must leave a claim, not grammatical residue: an
+            # answer that was mostly citation collapses to particles, and a
+            # pair against that fragment teaches nothing about support.
+            hangul = len(re.findall(r"[\uac00-\ud7a3]", stripped))
+            if len(stripped) < 15 or hangul < 8:
+                return None
+            return stripped
         if kind == "fabricated":
             return _perturb_number(answer, self._rng)
         if kind == "overreach":

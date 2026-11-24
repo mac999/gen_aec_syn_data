@@ -253,9 +253,28 @@ class AECPipeline:
 
         if want_dpo and self.sllm_sft_engine.samples:
             try:
+                # Pairs are built from verified rows only: a chosen answer
+                # that failed verification teaches a preference for the
+                # fabrication DPO exists to punish. With STaR in the run its
+                # survivors are used; otherwise the same checks run inline.
+                if want_star:
+                    dpo_source = self.star_engine.kept_records
+                else:
+                    from .verifiers import checks_for as _cf, verify as _v
+                    dpo_source = []
+                    for s_ in sft_dicts:
+                        a = ((s_.get("output") or {}).get("answer") or "").strip()
+                        idx = ((s_.get("input") or {}).get("metadata")
+                               or {}).get("chunk_index")
+                        src = chunk_text.get(idx) or "\n".join(chunk_text.values())
+                        tt = s_.get("task_type", "")
+                        if a and _v(a, src, tt, _cf(
+                                tt, self.config.star_task_verifiers)
+                                ).score >= self.config.star_min_score:
+                            dpo_source.append(s_)
                 self.dpo_engine.set_output_dir(
                     self.config.file_output_dir(stem, "dpo", subdir))
-                count += self.dpo_engine.build_pairs(sft_dicts)
+                count += self.dpo_engine.build_pairs(dpo_source)
                 logger.info("[PDF] DPO -> %s", self.dpo_engine.jsonl_path)
             except Exception as exc:
                 logger.error("[PDF] DPO engine error for '%s': %s", pdf_path.name, exc)

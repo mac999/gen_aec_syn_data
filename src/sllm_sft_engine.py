@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from pathlib import Path
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -34,7 +35,8 @@ from .config import (
 )
 from .raft import build_context
 from .sft_tasks import SFTTask, load_tasks, select_task, eligible_tasks
-from .verifiers import cited_articles, citations_in, measured_values, verify_numbers
+from .verifiers import (checks_for, cited_articles, citations_in,
+                        measured_values, verify, verify_numbers)
 from .schemas import DocumentChunk, EvidenceBlock, SFTInput, SFTInputMetadata, SFTOutput, SFTSample
 
 
@@ -198,6 +200,7 @@ class SLLM_SFT_Engine:
         # without re-reading the JSONL.
         self.samples: List[SFTSample] = []
 
+        self.rejects_path = Path(config.output_dir) / "sllm_rejected.jsonl"
         # Output path is set per input file via set_output_dir(); default here
         # keeps the engine usable standalone.
         self.jsonl_path = self.config.sft_output_dir / "sllm_training_data.jsonl"
@@ -219,6 +222,41 @@ class SLLM_SFT_Engine:
             return True
         i = chunk.chunk_index
         return int((i + 1) * ratio) > int(i * ratio)
+
+    def _gate_samples(self, samples: List[SFTSample], chunk: DocumentChunk,
+                      task) -> List[SFTSample]:
+        """Ground-check rows before they are written.
+
+        Until now a fabricated value or citation survived to the SFT file and
+        was only caught (or missed) by STaR afterwards; every consumer of
+        sllm_training_data.jsonl saw it. The gate applies the same numbers and
+        citations checks against the chunk the row came from, and writes
+        failures to sllm_rejected.jsonl with the reason. Closed-book tasks are
+        exempt: their answers come from domain knowledge, not the chunk.
+        """
+        if not samples or (task is not None and not task.renders_context()):
+            return samples
+        names = [n for n in checks_for(
+            task.name if task else "regulation_qa",
+            getattr(self.config, "star_task_verifiers", None))
+            if n in ("numbers", "citations")]
+        if not names:
+            return samples
+        kept: List[SFTSample] = []
+        for sample in samples:
+            verdict = verify(sample.output.answer, chunk.text,
+                             task.name if task else "", names)
+            if verdict.score >= 1.0:
+                kept.append(sample)
+                continue
+            record = sample.to_jsonl_dict()
+            record["rejection"] = {"stage": "sft_gate",
+                                   "reasons": verdict.reasons}
+            with self._counter_lock:
+                with open(self.rejects_path, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+            logger.debug("SFT gate rejected %s: %s", sample.id, verdict.reasons)
+        return kept
 
     def _twin_selected(self, chunk: DocumentChunk) -> bool:
         """Bresenham spread of refusal_twin_ratio over chunk indices."""
@@ -321,6 +359,7 @@ class SLLM_SFT_Engine:
         """Point this engine's JSONL output at *out_dir* (created if missing)."""
         out_dir.mkdir(parents=True, exist_ok=True)
         self.jsonl_path = out_dir / "sllm_training_data.jsonl"
+        self.rejects_path = out_dir / "sllm_rejected.jsonl"
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -409,6 +448,7 @@ class SLLM_SFT_Engine:
                     raw = self._call_ollama(
                         prompt_text, task.model if task else "")
                 samples = self._parse_multi_output(raw, chunk, negative)
+                samples = self._gate_samples(samples, chunk, task)
                 if samples:
                     if (task is not None and task.name == "grounded_rag"
                             and self._twin_selected(chunk)):

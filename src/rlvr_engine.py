@@ -32,12 +32,23 @@ class RLVREngine:
     def export(self, samples: List[dict], chunk_text: Dict[int, str]) -> int:
         """Write one RLVR task per sample; return the count."""
         written = 0
+        skipped = 0
         with open(self.jsonl_path, "a", encoding="utf-8") as fh:
             for sample in samples:
                 task_type = sample.get("task_type", "regulation_qa")
-                source = ((sample.get("input") or {}).get("context") or "").strip()
+                inp = sample.get("input") or {}
+                source = (inp.get("context") or "").strip()
                 if len(source) < 40:
-                    source = "\n".join(chunk_text.values())
+                    # The chunk the row came from, never the whole document:
+                    # the v0.5.3 run shipped 24/159 tasks whose reward source
+                    # was a 100k-character document, which no reward step can
+                    # honestly check an answer against.
+                    own = chunk_text.get(
+                        (inp.get("metadata") or {}).get("chunk_index"))
+                    if not own:
+                        skipped += 1
+                        continue
+                    source = own
                 if not sample.get("instruction"):
                     continue
                 fh.write(json.dumps({
@@ -55,6 +66,7 @@ class RLVREngine:
                     "source_doc_ids": sample.get("source_doc_ids", []),
                 }, ensure_ascii=False) + "\n")
                 written += 1
-        if written:
-            logger.info("RLVR tasks written: %d -> %s", written, self.jsonl_path)
+        if written or skipped:
+            logger.info("RLVR tasks written: %d (skipped %d without a usable "
+                        "source) -> %s", written, skipped, self.jsonl_path)
         return written
