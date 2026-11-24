@@ -41,6 +41,7 @@ class STaREngine:
         threshold = self.config.star_min_score
         kept = 0
         rejected = 0
+        passed: List[dict] = []
         with open(self.jsonl_path, "a", encoding="utf-8") as ok, \
              open(self.rejects_path, "a", encoding="utf-8") as bad:
             for sample in samples:
@@ -65,11 +66,40 @@ class STaREngine:
                     "reasons": verdict.reasons,
                 }
                 if verdict.score >= threshold:
-                    ok.write(json.dumps(record, ensure_ascii=False) + "\n")
-                    kept += 1
+                    passed.append(record)
                 else:
                     bad.write(json.dumps(record, ensure_ascii=False) + "\n")
                     rejected += 1
+
+            # Per-document share cap. The v0.5.3 run let refusal rows grow to
+            # 18.4% of the verified split (0.1% in v0.5.2) because the refusal
+            # check passes almost anything that declines; the trained model
+            # then refused 60% of answerable items. The cap bounds a task
+            # type's share of the verified output; the deterministic id order
+            # keeps reruns reproducible. Capped rows are recorded as rejects
+            # with their own reason, not silently dropped.
+            caps = getattr(self.config, "star_task_share_cap", None) or {}
+            if caps and passed:
+                total = len(passed)
+                seen: Dict[str, int] = {}
+                capped_out = []
+                for record in sorted(passed, key=lambda r: r.get("id", "")):
+                    t = record.get("task_type", "")
+                    limit = caps.get(t)
+                    if limit is not None and (seen.get(t, 0) + 1) > max(
+                            1, int(total * float(limit))):
+                        record["verification"]["reasons"] = (
+                            record["verification"]["reasons"]
+                            + [f"share cap: {t} > {limit}"])
+                        bad.write(json.dumps(record, ensure_ascii=False) + "\n")
+                        rejected += 1
+                        continue
+                    seen[t] = seen.get(t, 0) + 1
+                    capped_out.append(record)
+                passed = capped_out
+            for record in passed:
+                ok.write(json.dumps(record, ensure_ascii=False) + "\n")
+                kept += 1
         if kept or rejected:
             logger.info("STaR: kept %d, rejected %d (min_score=%.2f) -> %s",
                         kept, rejected, threshold, self.jsonl_path)

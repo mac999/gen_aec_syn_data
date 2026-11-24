@@ -441,6 +441,9 @@ class PipelineConfig:
     # STaR keeps only generations that verify against their source; RLVR
     # exports the same checks as a computable reward for an RL loop.
     star_min_score: float = 1.0
+    # Upper bound on a task type's share of the verified STaR output, per
+    # document, e.g. {"refusal": 0.08}. Empty dict disables the cap.
+    star_task_share_cap: dict = field(default_factory=dict)
     # Which checks each task's answers must pass. Empty -> verifiers.TASK_VERIFIERS.
     star_task_verifiers: dict = field(default_factory=dict)
 
