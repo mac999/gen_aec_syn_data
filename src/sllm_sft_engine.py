@@ -34,7 +34,7 @@ from .config import (
 )
 from .raft import build_context
 from .sft_tasks import SFTTask, load_tasks, select_task, eligible_tasks
-from .verifiers import citations_in
+from .verifiers import cited_articles, citations_in, measured_values, verify_numbers
 from .schemas import DocumentChunk, EvidenceBlock, SFTInput, SFTInputMetadata, SFTOutput, SFTSample
 
 
@@ -220,6 +220,60 @@ class SLLM_SFT_Engine:
         i = chunk.chunk_index
         return int((i + 1) * ratio) > int(i * ratio)
 
+    def _twin_selected(self, chunk: DocumentChunk) -> bool:
+        """Bresenham spread of refusal_twin_ratio over chunk indices."""
+        ratio = getattr(self.config, "refusal_twin_ratio", 0.0)
+        if ratio <= 0:
+            return False
+        if ratio >= 1:
+            return True
+        i = chunk.chunk_index
+        return int((i + 1) * ratio) > int(i * ratio)
+
+    def _build_refusal_twin(self, source: SFTSample, chunk: DocumentChunk,
+                            pool: List[DocumentChunk]) -> Optional[SFTSample]:
+        """A refusal row cloned from a verified grounded answer.
+
+        The question is kept; the context is rebuilt without the golden
+        passage; the answer becomes the refusal template. The row is emitted
+        only when nothing in the distractor block could support the original
+        answer — no shared measured value and no shared article reference —
+        so "unanswerable from this context" holds by construction rather than
+        by the generating model's judgement.
+        """
+        answer = (source.output.answer or "").strip()
+        # Only ground-verified answers make trustworthy twins.
+        if verify_numbers(answer, chunk.text).score < 1.0:
+            return None
+        distractors = build_context(chunk, pool, self.config.raft_distractors,
+                                    include_golden=False,
+                                    max_chars=self.config.chunk_max_size)
+        if not distractors.strip():
+            return None
+        if set(measured_values(answer)) & set(measured_values(distractors)):
+            return None
+        if set(cited_articles(answer)) & set(cited_articles(distractors)):
+            return None
+        section = next((e.section for e in source.output.evidence if e.section), "")
+        template = getattr(self.config, "refusal_twin_answer", "")
+        if section:
+            refusal = template.format(doc=chunk.doc_id, section=section)
+        else:
+            # No named section: keep the sentence structure but drop the slot.
+            refusal = template.format(doc=chunk.doc_id, section="해당").replace(
+                "의 해당 조문", " 원문")
+        return SFTSample(
+            id=self._next_id(),
+            task_type="refusal",
+            domain_tags=list(source.domain_tags),
+            source_doc_ids=list(source.source_doc_ids),
+            instruction=source.instruction,
+            input=SFTInput(context=distractors,
+                           metadata=source.input.metadata.model_copy()),
+            output=SFTOutput(answer=refusal, evidence=[],
+                             final_label="unanswerable"),
+        )
+
     def _render_prompt(self, chunk: DocumentChunk, negative: bool,
                        task: Optional[SFTTask] = None,
                        pool: Optional[List[DocumentChunk]] = None) -> str:
@@ -356,6 +410,14 @@ class SLLM_SFT_Engine:
                         prompt_text, task.model if task else "")
                 samples = self._parse_multi_output(raw, chunk, negative)
                 if samples:
+                    if (task is not None and task.name == "grounded_rag"
+                            and self._twin_selected(chunk)):
+                        for src in samples:
+                            twin = self._build_refusal_twin(src, chunk,
+                                                            pool or [chunk])
+                            if twin is not None:
+                                samples.append(twin)
+                                break  # one twin per chunk keeps the ratio meaningful
                     return samples
             except Exception as exc:
                 last_error = exc

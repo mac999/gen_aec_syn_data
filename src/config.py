@@ -394,6 +394,19 @@ class PipelineConfig:
     # instead of positive QA pairs. 0.0 disables negatives (backward-compatible).
     sft_negative_ratio: float = 0.0
 
+    # Refusal twins. Instead of asking the model to invent an unanswerable
+    # question (unverifiable — the v0.5.3 rows taught blanket refusal), reuse
+    # a grounded_rag QA whose answer verified against its chunk: same
+    # question, context rebuilt WITHOUT the golden passage, answer replaced by
+    # the refusal template. Answerability is then guaranteed by construction
+    # on both sides of the pair. Ratio is the fraction of grounded_rag chunks
+    # that also emit a twin, selected deterministically by chunk index.
+    refusal_twin_ratio: float = 0.0
+    # {doc} and {section} are filled from the source row; a missing section
+    # drops the second sentence down to the document name alone.
+    refusal_twin_answer: str = ("제시된 자료만으로는 확인할 수 없습니다. "
+                                "{doc}의 {section} 조문이 필요합니다.")
+
     # Task mix. Empty list -> sft_tasks.DEFAULT_SFT_TASKS. Each entry is
     # {name, retrieval, template, weight}; retrieval is open_book |
     # closed_book | raft. A single open_book task reproduces the old
