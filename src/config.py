@@ -440,6 +440,15 @@ class PipelineConfig:
 
     # STaR keeps only generations that verify against their source; RLVR
     # exports the same checks as a computable reward for an RL loop.
+    # kcbench holdout manifest (ground_truth_*/holdout.json). When set, the
+    # documents its pdf_documents[*].generated_dir names are excluded from
+    # SFT/STaR/DPO/RLVR generation — their text must not leak into training
+    # rows that the benchmark then evaluates. DAPT and the retrieval corpus
+    # keep them: the benchmark's open-book track retrieves from the corpus,
+    # and holding documents out of it would change what retrieval can see.
+    # Empty string disables the filter.
+    holdout_file: str = ""
+
     star_min_score: float = 1.0
     # Upper bound on a task type's share of the verified STaR output, per
     # document, e.g. {"refusal": 0.08}. Empty dict disables the cap.

@@ -74,6 +74,8 @@ class AECPipeline:
         logger.info("AEC Synthetic Dataset Generation Pipeline — START")
         logger.info("=" * 60)
 
+        self._holdout_cache = None
+        self._holdout_skipped = 0
         self.config.ensure_output_dirs()
 
         # Discover input files. Naming files on either flag means the run is
@@ -130,6 +132,9 @@ class AECPipeline:
 
         logger.info("=" * 60)
         logger.info("Pipeline finished. sLLM=%d  VLM=%d", sft_total, vlm_total)
+        if self._holdout_skipped:
+            logger.info("Holdout filter withheld SFT/STaR/DPO/RLVR for %d "
+                        "document(s)", self._holdout_skipped)
         logger.info("=" * 60)
 
     def _process_pdf(self, pdf_path: Path) -> int:
@@ -150,6 +155,16 @@ class AECPipeline:
         want_dpo = mode in ("dpo", "all")
         want_star = mode in ("star", "all")
         want_rlvr = mode in ("rlvr", "all")
+
+        # A benchmark-held-out document must not contribute training rows.
+        # Its chunks still reach DAPT and the retrieval corpus (the open-book
+        # track needs them there); only the supervised rows are withheld.
+        if pdf_path.stem in self._holdout_stems():
+            if want_sft or want_dpo or want_star or want_rlvr:
+                self._holdout_skipped += 1
+                logger.info("[PDF] '%s' is benchmark holdout — skipping "
+                            "SFT/STaR/DPO/RLVR generation", pdf_path.stem)
+            want_sft = want_dpo = want_star = want_rlvr = False
 
         # Routing decides whether this document trains, gets indexed, or both.
         # Amended regulations memorised into weights go stale; the same text in
@@ -247,6 +262,29 @@ class AECPipeline:
 
         logger.info("[PDF] Done '%s' — %d records generated", pdf_path.name, count)
         return count
+
+    def _holdout_stems(self) -> set:
+        """Document stems the configured kcbench holdout file names."""
+        if self._holdout_cache is not None:
+            return self._holdout_cache
+        stems: set = set()
+        hf = getattr(self.config, "holdout_file", "") or ""
+        if hf:
+            try:
+                import json as _json
+                data = _json.loads(Path(hf).read_text(encoding="utf-8"))
+                for doc in data.get("pdf_documents", []) or []:
+                    name = str(doc.get("generated_dir", "")).strip()
+                    if name:
+                        stems.add(Path(name).name)
+                logger.info("Holdout filter active: %d document(s) from %s",
+                            len(stems), hf)
+            except (OSError, ValueError) as exc:
+                # A configured-but-unreadable holdout file must not silently
+                # produce a contaminated dataset.
+                raise RuntimeError(f"holdout_file set but unreadable: {hf}: {exc}")
+        self._holdout_cache = stems
+        return stems
 
     def _process_ifc(self, ifc_path: Path) -> int:
         logger.info("[IFC] Processing: %s", ifc_path.name)
