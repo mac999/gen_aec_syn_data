@@ -379,14 +379,38 @@ class SLLM_SFT_Engine:
             return 0
 
         workers = max(1, self.config.llm_parallel)
+
+        # Spread the per-document budget over the whole document before any
+        # call is made. The old path submitted every chunk and stopped at
+        # max_samples_per_doc, so a long document was sampled only from its
+        # opening pages — a 418-chunk specification got all of its rows from
+        # the first 4.3%. Selecting ceil(budget/qa_per_chunk) chunks at a
+        # fixed stride covers front, middle and back, and the deterministic
+        # selection keeps reruns stable.
+        budget = self.config.max_samples_per_doc
+        per_call = max(1, self.config.qa_per_chunk)
+        need = max(1, -(-budget // per_call))          # ceil division
+        if need < len(chunks):
+            stride = len(chunks) / need
+            picked = [chunks[min(len(chunks) - 1, int(i * stride))]
+                      for i in range(need)]
+            logger.info(
+                "Budget %d rows: sampling %d of %d chunks at stride %.1f",
+                budget, len(picked), len(chunks), stride,
+            )
+        else:
+            picked = list(chunks)
+
         logger.info(
             "Processing %d chunks — backend=%s, parallel=%d, qa_per_chunk=%d",
-            len(chunks), self.config.llm_backend, workers, self.config.qa_per_chunk,
+            len(picked), self.config.llm_backend, workers, self.config.qa_per_chunk,
         )
         successful = 0
         with ThreadPoolExecutor(max_workers=workers) as pool:
+            # The distractor pool stays the full chunk list: raft context
+            # quality must not depend on how thinly the budget is spread.
             futures = [pool.submit(self._synthesise_with_retry, c, chunks)
-                       for c in chunks]
+                       for c in picked]
             for future in as_completed(futures):
                 for sample in (future.result() or []):
                     self._append_sample(sample)
