@@ -662,6 +662,7 @@ class SLLM_SFT_Engine:
                 doc_id=chunk.doc_id,
                 chunk_index=chunk.chunk_index,
                 version=getattr(self.config, "generator_version", ""),
+                source_date=self.current_source_date,
                 # The generating task, not whatever the model called it.
                 task_type=self._task_of_chunk.get(
                     chunk.chunk_index, data.get("task_type", "regulation_qa")),
