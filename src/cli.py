@@ -172,7 +172,7 @@ def _parse_args(defaults) -> argparse.Namespace:
 
     # ── Config file ───────────────────────────────────────────────────────
     parser.add_argument(
-        "--config",
+        "-c", "--config",
         type=Path,
         metavar="JSON_PATH",
         help="Load configuration from a JSON file. Replaces config.json as the base; explicit CLI flags still win over it.",
@@ -277,42 +277,49 @@ def _build_config(args: argparse.Namespace, base):
     """Apply CLI overrides on top of *base* (loaded from config.json)."""
     from .config import PipelineConfig  # local import to keep startup fast
 
+    # The parser's defaults were filled from config.json, so a flag value
+    # equal to that default means "the user did not pass it". Keep that
+    # snapshot before any replacement: with --config, assigning the defaults
+    # back verbatim silently reverted every CLI-exposed field of the loaded
+    # file to its config.json value — a v054 run would have written into the
+    # v053 output directory because config.json still pointed there.
+    config_json_base = base
     if args.config:
         logger.info("Loading config from %s", args.config)
         # The file replaces config.json as the base, not the command line.
-        # Returning here discarded --input-dir, --output-dir and --dataset,
-        # so a second dataset variant -- one config file per corpus, paths
-        # given per run -- could not be driven at all: the English corpus
-        # silently generated from the Korean input directory.
         base = PipelineConfig.from_json(args.config)
 
-    # Every CLI flag defaulted to the matching base value, so assigning them
-    # back is a no-op unless the user explicitly overrode the flag. Config
-    # fields not exposed on the CLI keep their config file values.
     cfg = base
-    cfg.input_dir = args.input_dir
-    cfg.output_dir = args.output_dir
-    cfg.dataset_mode = args.dataset
-    cfg.llm_backend = args.backend
-    cfg.llm_parallel = args.parallel
-    cfg.qa_per_chunk = args.qa_per_chunk
-    cfg.ollama_model = args.model
-    cfg.ollama_base_url = args.ollama_url
-    cfg.llama_server_url = args.llama_server_url
-    cfg.gemini_api_key = args.gemini_api_key
-    cfg.gemini_model = args.gemini_model
-    cfg.ollama_temperature = args.temperature
-    cfg.max_samples_per_doc = args.max_samples
-    cfg.chunk_min_size = args.chunk_min
-    cfg.chunk_max_size = args.chunk_max
-    cfg.chunk_overlap = args.chunk_overlap
-    cfg.comfyui_url = args.comfyui_url
-    cfg.ifc_views = args.ifc_views
-    cfg.ifc_render_width = args.render_size
-    cfg.ifc_render_height = args.render_size
-    cfg.raft_distractors = args.raft_distractors
-    cfg.doc_routing = args.doc_routing
-    cfg.star_min_score = args.star_min_score
+
+    def _apply(field: str, value) -> None:
+        """Set *field* unless it is just the config.json default echoing back."""
+        if args.config and value == getattr(config_json_base, field):
+            return
+        setattr(cfg, field, value)
+
+    _apply("input_dir", args.input_dir)
+    _apply("output_dir", args.output_dir)
+    _apply("dataset_mode", args.dataset)
+    _apply("llm_backend", args.backend)
+    _apply("llm_parallel", args.parallel)
+    _apply("qa_per_chunk", args.qa_per_chunk)
+    _apply("ollama_model", args.model)
+    _apply("ollama_base_url", args.ollama_url)
+    _apply("llama_server_url", args.llama_server_url)
+    _apply("gemini_api_key", args.gemini_api_key)
+    _apply("gemini_model", args.gemini_model)
+    _apply("ollama_temperature", args.temperature)
+    _apply("max_samples_per_doc", args.max_samples)
+    _apply("chunk_min_size", args.chunk_min)
+    _apply("chunk_max_size", args.chunk_max)
+    _apply("chunk_overlap", args.chunk_overlap)
+    _apply("comfyui_url", args.comfyui_url)
+    _apply("ifc_views", args.ifc_views)
+    _apply("ifc_render_width", args.render_size)
+    _apply("ifc_render_height", args.render_size)
+    _apply("raft_distractors", args.raft_distractors)
+    _apply("doc_routing", args.doc_routing)
+    _apply("star_min_score", args.star_min_score)
     if args.reuse_images is not None:
         cfg.reuse_images = args.reuse_images
     if args.dpo_rejections:
