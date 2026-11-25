@@ -486,6 +486,14 @@ class PipelineConfig:
     # Empty list keeps the scored train/both/retrieve behaviour unchanged.
     corpus_routes: list = field(default_factory=list)
 
+    # Content-based labelling used by corpus_routes' `embed_label` condition.
+    # {model, prefix, labels: {name: [example passages]}, uncertain_margin}.
+    # The examples decide the quality: drawn from the corpus being routed it
+    # reached 97% on form-vs-clause, hand-written and without the model's
+    # prefix it fell to 53%. Empty labels disables the classifier and the
+    # scored path is used instead.
+    routing_classifier: dict = field(default_factory=dict)
+
     # Processing limits
     max_samples_per_doc: int = 50
     batch_size: int = 5

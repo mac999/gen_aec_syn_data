@@ -23,6 +23,7 @@ from .config import PipelineConfig
 from .ifc_processor import IFCProcessor
 from .pdf_extractor import PDFExtractor
 from .doc_routing import classify, extract_provenance, match_rule
+from .routing_classifier import EmbeddingRouter
 from .dpo_engine import DPOEngine
 from .sllm_dapt_engine import SLLM_DAPT_Engine
 from .rag_engine import RAGEngine
@@ -50,6 +51,7 @@ class AECPipeline:
         self.rag_engine = RAGEngine(config)
         self.star_engine = STaREngine(config)
         self.rlvr_engine = RLVREngine(config)
+        self.routing_classifier = EmbeddingRouter(config)
 
     def run(
         self,
@@ -172,7 +174,19 @@ class AECPipeline:
         # A declared rule wins over the scorer: corpus_routes is how a user
         # states "these files are this use case", which is knowledge the
         # scoring heuristics cannot recover from the text.
-        decision = match_rule(pdf_path, getattr(self.config, "corpus_routes", None))
+        # Content label for rules that ask for one. Computed from the opening
+        # chunk, which is where a document states what it is; skipped
+        # entirely when no rule uses embed_label so the cost is not paid for
+        # a purely path-based config.
+        verdict = None
+        routes = getattr(self.config, "corpus_routes", None) or []
+        if any("embed_label" in (r.get("when") or {})
+               for r in routes if isinstance(r, dict)):
+            verdict = self.routing_classifier.label(
+                chunks[0].text if chunks else "")
+        decision = match_rule(pdf_path, routes,
+                              verdict.label if verdict and verdict.label else None,
+                              verdict.margin if verdict else 0.0)
         if decision is None:
             setting = self.config.doc_routing
             if setting == "auto":

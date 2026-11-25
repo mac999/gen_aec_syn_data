@@ -80,7 +80,8 @@ class RouteDecision:
                 "signals": self.signals}
 
 
-def match_rule(path: Path, rules) -> Optional[RouteDecision]:
+def match_rule(path: Path, rules, label: Optional[str] = None,
+               margin: float = 0.0) -> Optional[RouteDecision]:
     """First matching corpus_routes rule for *path*, or None.
 
     A rule is {name, when, emit}. ``when`` supports ``glob`` (path pattern,
@@ -94,7 +95,7 @@ def match_rule(path: Path, rules) -> Optional[RouteDecision]:
         if not isinstance(rule, dict):
             raise ValueError(f"corpus_routes[{i}] must be an object")
         when = rule.get("when") or {}
-        unknown = set(when) - {"glob", "regex"}
+        unknown = set(when) - {"glob", "regex", "embed_label", "min_margin"}
         if unknown:
             # A condition this stage cannot evaluate must not silently pass.
             continue
@@ -108,6 +109,13 @@ def match_rule(path: Path, rules) -> Optional[RouteDecision]:
                 ok = ok and bool(re.search(str(when["regex"]), path.name))
             except re.error as exc:
                 raise ValueError(f"corpus_routes[{i}] regex invalid: {exc}")
+        if "embed_label" in when:
+            # No label available (classifier off or the document was
+            # uncertain) means the rule cannot fire; the scored path or a
+            # later rule decides instead.
+            ok = ok and label is not None and label == str(when["embed_label"])
+            if ok and "min_margin" in when:
+                ok = margin >= float(when["min_margin"])
         if not ok:
             continue
         emit = rule.get("emit")
@@ -119,7 +127,10 @@ def match_rule(path: Path, rules) -> Optional[RouteDecision]:
                 f"corpus_routes[{i}] emits unknown corpora: {sorted(bad)}; "
                 f"known: {CORPORA}")
         name = str(rule.get("name") or f"rule_{i}")
-        return RouteDecision(name, 0.0, [f"rule:{name}"], tuple(emit))
+        why = [f"rule:{name}"]
+        if "embed_label" in when:
+            why.append(f"label:{label}@{margin:.3f}")
+        return RouteDecision(name, 0.0, why, tuple(emit))
     return None
 
 
