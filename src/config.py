@@ -178,6 +178,12 @@ class PipelineConfig:
     # threshold are settings; the defaults are the Korean behaviour unchanged.
     informative_script: str = "\uac00-\ud7a3"      # Hangul syllables
     informative_min_chars: int = 20
+    # Structural junk gate. A chunk is dropped when both signals agree that
+    # it is table residue: too few letters, and no run of readable words.
+    # Script-independent, so a non-Korean corpus needs no new patterns.
+    # Set structural_min_prose_run to 0 to disable the gate.
+    structural_min_letter_ratio: float = 0.40
+    structural_min_prose_run: int = 4
     chunk_min_size: int = 100
     chunk_max_size: int = 300
     chunk_overlap: int = 100
