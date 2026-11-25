@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -45,15 +46,81 @@ _STABLE = [
 ]
 
 
+# Every corpus a route may emit. The names match the engines in pipeline.py;
+# "rag" is the retrieval index, the rest are trained on.
+CORPORA = ("dapt", "sft", "star", "dpo", "rlvr", "rag")
+
+# What the three legacy routes emit, so a config without corpus_routes keeps
+# behaving exactly as it did.
+_LEGACY_EMIT = {
+    "train":    ("dapt", "sft", "star", "dpo", "rlvr"),
+    "both":     ("dapt", "sft", "star", "dpo", "rlvr", "rag"),
+    "retrieve": ("rag",),
+}
+
+
 @dataclass
 class RouteDecision:
     route: str
     score: float
     signals: List[str] = field(default_factory=list)
+    # Which corpora this document feeds. None means "derive from route",
+    # which is what the scoring path does; a corpus_routes rule sets it
+    # explicitly and the route string becomes the rule's name.
+    emit: Optional[tuple] = None
+
+    def emits(self, corpus: str) -> bool:
+        """Whether *corpus* should be written for this document."""
+        allowed = self.emit if self.emit is not None else _LEGACY_EMIT.get(
+            self.route, _LEGACY_EMIT["train"])
+        return corpus in allowed
 
     def as_metadata(self) -> Dict[str, object]:
         return {"route": self.route, "volatility_score": round(self.score, 2),
                 "signals": self.signals}
+
+
+def match_rule(path: Path, rules) -> Optional[RouteDecision]:
+    """First matching corpus_routes rule for *path*, or None.
+
+    A rule is {name, when, emit}. ``when`` supports ``glob`` (path pattern,
+    matched against the path as given and against its name) and ``regex``
+    (filename pattern); an empty ``when`` matches everything, which is how a
+    default rule is written. Rules are tried in order, so the default goes
+    last. Content-based conditions are added by later stages; a rule carrying
+    only those is skipped here rather than treated as a match-all.
+    """
+    for i, rule in enumerate(rules or []):
+        if not isinstance(rule, dict):
+            raise ValueError(f"corpus_routes[{i}] must be an object")
+        when = rule.get("when") or {}
+        unknown = set(when) - {"glob", "regex"}
+        if unknown:
+            # A condition this stage cannot evaluate must not silently pass.
+            continue
+        ok = True
+        if "glob" in when:
+            pat = str(when["glob"])
+            ok = ok and (fnmatch(str(path), pat) or fnmatch(path.name, pat)
+                         or fnmatch(path.as_posix(), pat))
+        if "regex" in when:
+            try:
+                ok = ok and bool(re.search(str(when["regex"]), path.name))
+            except re.error as exc:
+                raise ValueError(f"corpus_routes[{i}] regex invalid: {exc}")
+        if not ok:
+            continue
+        emit = rule.get("emit")
+        if emit is None:
+            raise ValueError(f"corpus_routes[{i}] needs an 'emit' list")
+        bad = set(emit) - set(CORPORA)
+        if bad:
+            raise ValueError(
+                f"corpus_routes[{i}] emits unknown corpora: {sorted(bad)}; "
+                f"known: {CORPORA}")
+        name = str(rule.get("name") or f"rule_{i}")
+        return RouteDecision(name, 0.0, [f"rule:{name}"], tuple(emit))
+    return None
 
 
 def _compiled(signals) -> List[tuple]:

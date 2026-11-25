@@ -472,6 +472,14 @@ class PipelineConfig:
     # argues for retrieval, negative for training.
     routing_signals: list = field(default_factory=list)
 
+    # Declarative document -> corpus mapping, same shape as sft_tasks. Each
+    # entry is {name, when, emit}: `when` selects documents (glob on the path,
+    # regex on the file name; empty matches everything, which is how the last
+    # entry becomes the default), `emit` lists the corpora to write from
+    # doc_routing.CORPORA. Rules are tried in order and the first match wins.
+    # Empty list keeps the scored train/both/retrieve behaviour unchanged.
+    corpus_routes: list = field(default_factory=list)
+
     # Processing limits
     max_samples_per_doc: int = 50
     batch_size: int = 5

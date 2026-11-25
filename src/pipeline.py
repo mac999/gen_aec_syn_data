@@ -22,7 +22,7 @@ from typing import List, Optional
 from .config import PipelineConfig
 from .ifc_processor import IFCProcessor
 from .pdf_extractor import PDFExtractor
-from .doc_routing import classify, extract_provenance
+from .doc_routing import classify, extract_provenance, match_rule
 from .dpo_engine import DPOEngine
 from .sllm_dapt_engine import SLLM_DAPT_Engine
 from .rag_engine import RAGEngine
@@ -169,21 +169,29 @@ class AECPipeline:
         # Routing decides whether this document trains, gets indexed, or both.
         # Amended regulations memorised into weights go stale; the same text in
         # a retrieval corpus is replaced by one reindex.
-        setting = self.config.doc_routing
-        if setting == "auto":
-            decision = classify(pdf_path, chunks[0].text if chunks else "",
-                                self.config.routing_threshold,
-                                self.config.routing_both_margin,
-                                self.config.routing_signals)
-        else:
-            decision = classify(pdf_path)
-            decision.route = setting if setting in ("train", "retrieve", "both") else "train"
-        if decision.route == "retrieve":
-            # Every supervised corpus is withheld, not just the three that
-            # happen to be guarded downstream: STaR and RLVR only skipped
-            # because an empty sft_dicts short-circuits them, which stops
-            # being true the moment either can run without SFT.
-            want_sft = want_dapt = want_dpo = want_star = want_rlvr = False
+        # A declared rule wins over the scorer: corpus_routes is how a user
+        # states "these files are this use case", which is knowledge the
+        # scoring heuristics cannot recover from the text.
+        decision = match_rule(pdf_path, getattr(self.config, "corpus_routes", None))
+        if decision is None:
+            setting = self.config.doc_routing
+            if setting == "auto":
+                decision = classify(pdf_path, chunks[0].text if chunks else "",
+                                    self.config.routing_threshold,
+                                    self.config.routing_both_margin,
+                                    self.config.routing_signals)
+            else:
+                decision = classify(pdf_path)
+                decision.route = setting if setting in ("train", "retrieve", "both") else "train"
+
+        # The decision names the corpora directly; no route string is
+        # translated into flags here any more, so a rule emitting, say, DAPT
+        # and RAG but not SFT is expressible.
+        want_sft = want_sft and decision.emits("sft")
+        want_dapt = want_dapt and decision.emits("dapt")
+        want_dpo = want_dpo and decision.emits("dpo")
+        want_star = want_star and decision.emits("star")
+        want_rlvr = want_rlvr and decision.emits("rlvr")
         logger.info("[PDF] route=%s score=%.1f %s",
                     decision.route, decision.score, decision.signals)
         logger.info(
@@ -224,7 +232,7 @@ class AECPipeline:
             except Exception as exc:
                 logger.error("[PDF] DAPT engine error for '%s': %s", pdf_path.name, exc)
 
-        if decision.route in ("retrieve", "both"):
+        if decision.emits("rag"):
             try:
                 self.rag_engine.set_output_dir(
                     self.config.file_output_dir(stem, "rag", subdir))
