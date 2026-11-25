@@ -24,8 +24,11 @@ documents at eight-way parallelism, against 43 hours for the generation
 pass the routing feeds.
 
 The classifier reports a margin alongside the label. A document whose top
-two labels are within `uncertain_margin` is returned as uncertain, which is
-what a later LLM stage adjudicates instead of guessing here.
+two labels are within `uncertain_margin` goes to the LLM stage when one is
+configured, and is returned as uncertain otherwise. Only those documents
+pay the LLM price: on the measured corpus 9 of 60 fell in that band, so a
+cascade costs roughly a sixth of what labelling everything with an LLM
+would, for the cases where the cheap signal genuinely cannot decide.
 """
 from __future__ import annotations
 
@@ -35,6 +38,16 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence
 
 logger = logging.getLogger("AEC_Pipeline.routing_classifier")
+
+
+# One label name on a line by itself; anything else is treated as a refusal
+# to decide, which keeps a chatty model from being read as a confident one.
+DEFAULT_LLM_PROMPT = (
+    "Classify the document excerpt into exactly one of these categories:\n"
+    "{labels}\n\n"
+    "Answer with the category name alone, nothing else. If the excerpt fits "
+    "none of them, answer: none\n\n"
+    "Excerpt:\n---\n{text}\n---\n\nCategory:")
 
 
 @dataclass
@@ -79,6 +92,16 @@ class EmbeddingRouter:
         self._labels: Dict[str, List[str]] = {
             str(k): [str(x) for x in v] for k, v in (spec.get("labels") or {}).items()}
         self._centroids: Optional[Dict[str, List[float]]] = None
+
+        # Adjudication for the uncertain band. Off unless a model is named;
+        # the prompt is a config string for the same reason the SFT prompts
+        # are, and {labels} / {text} are filled in here.
+        llm = spec.get("llm") or {}
+        self.llm_model = str(llm.get("model") or "")
+        self.llm_prompt = str(llm.get("prompt_template") or DEFAULT_LLM_PROMPT)
+        self.llm_temperature = float(llm.get("temperature", 0.0))
+        self.llm_max_chars = int(llm.get("max_chars", 1500))
+        self.llm_calls = 0
 
     # ── embedding ───────────────────────────────────────────────────────
     def _embed(self, text: str) -> List[float]:
@@ -127,9 +150,41 @@ class EmbeddingRouter:
         if len(ranked) == 1:
             return LabelVerdict(ranked[0][0], 1.0, scores)
         gap = ranked[0][1] - ranked[1][1]
+        if gap < self.margin and self.llm_model:
+            decided = self._ask_llm(text)
+            if decided:
+                return LabelVerdict(decided, gap, scores)
         if gap < self.margin:
             return LabelVerdict("", gap, scores)
         return LabelVerdict(ranked[0][0], gap, scores)
 
 
-__all__ = ["EmbeddingRouter", "LabelVerdict"]
+    def _ask_llm(self, text: str) -> str:
+        """Label from the LLM, or "" when it declines or is unreachable."""
+        import requests  # noqa: PLC0415
+        prompt = self.llm_prompt.format(
+            labels="\n".join(f"- {n}" for n in self._labels),
+            text=text[:self.llm_max_chars])
+        try:
+            r = requests.post(
+                f"{self.base_url.rstrip('/')}/api/generate",
+                json={"model": self.llm_model, "prompt": prompt, "stream": False,
+                      "options": {"temperature": self.llm_temperature}},
+                timeout=self.timeout)
+            r.raise_for_status()
+            answer = (r.json().get("response") or "").strip()
+        except Exception as exc:
+            logger.warning("Routing LLM unavailable (%s); leaving the "
+                           "document uncertain", exc)
+            return ""
+        self.llm_calls += 1
+        # Accept only an exact label name: a model that explains itself has
+        # not answered the question it was asked.
+        first = answer.splitlines()[0].strip().strip(".\"'") if answer else ""
+        if first in self._labels:
+            return first
+        logger.debug("Routing LLM gave no usable label: %r", answer[:80])
+        return ""
+
+
+__all__ = ["EmbeddingRouter", "LabelVerdict", "DEFAULT_LLM_PROMPT"]

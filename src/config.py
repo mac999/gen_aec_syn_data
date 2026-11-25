@@ -487,7 +487,11 @@ class PipelineConfig:
     corpus_routes: list = field(default_factory=list)
 
     # Content-based labelling used by corpus_routes' `embed_label` condition.
-    # {model, prefix, labels: {name: [example passages]}, uncertain_margin}.
+    # {model, prefix, labels: {name: [example passages]}, uncertain_margin,
+    #  llm: {model, prompt_template, temperature}}. The llm block is the
+    # cascade's last stage: it is asked only about documents whose top two
+    # labels sit inside uncertain_margin (15% of the measured sample), and
+    # its prompt is a config string for the same reason the SFT prompts are.
     # The examples decide the quality: drawn from the corpus being routed it
     # reached 97% on form-vs-clause, hand-written and without the model's
     # prefix it fell to 53%. Empty labels disables the classifier and the
