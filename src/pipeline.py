@@ -179,7 +179,11 @@ class AECPipeline:
             decision = classify(pdf_path)
             decision.route = setting if setting in ("train", "retrieve", "both") else "train"
         if decision.route == "retrieve":
-            want_sft = want_dapt = want_dpo = False
+            # Every supervised corpus is withheld, not just the three that
+            # happen to be guarded downstream: STaR and RLVR only skipped
+            # because an empty sft_dicts short-circuits them, which stops
+            # being true the moment either can run without SFT.
+            want_sft = want_dapt = want_dpo = want_star = want_rlvr = False
         logger.info("[PDF] route=%s score=%.1f %s",
                     decision.route, decision.score, decision.signals)
         logger.info(

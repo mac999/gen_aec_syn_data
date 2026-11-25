@@ -108,6 +108,12 @@ def extract_provenance(path: Path, head_text: str = "") -> Dict[str, Optional[st
         m = re.search(pattern, haystack)
         return m.group(0).strip() if m else None
 
+    def _year(text: str) -> Optional[str]:
+        m = (re.search(r"[(\[]\s*제?\s*((?:19|20)\d{2})\s*-\s*\d+\s*호", text)
+             or re.search(r"[(\[]\s*((?:19|20)\d{2})\s*[)\]]", text)
+             or re.search(r"\b((?:19|20)\d{2})\s*년\s*판", text))
+        return m.group(1) if m else None
+
     return {
         "source_name": path.name,
         "issuing_body": first(r"(국토교통부|행정안전부|고용노동부|환경부|소방청|"
@@ -115,5 +121,9 @@ def extract_provenance(path: Path, head_text: str = "") -> Dict[str, Optional[st
         "document_no": first(r"제\s*\d{2,4}\s*-?\s*\d*\s*호"),
         "effective_date": first(r"(19|20)\d{2}\s*[.\-년]\s*\d{1,2}\s*[.\-월]\s*\d{1,2}"),
         "revision_label": first(r"(전부개정|일부개정|폐지제정|제정|개정)"),
-        "edition_year": first(r"[(\[](19|20)\d{2}[)\]]"),
+        # Korean notices carry the year inside the issue number —
+        # "(제2023-98호)" — which the bare "(2023)" pattern never matched:
+        # the field came back empty for every one of the 18,750 v0.5.3
+        # records. Both spellings are accepted, and only the year is kept.
+        "edition_year": _year(haystack),
     }
