@@ -1085,10 +1085,10 @@ python main.py --config config.json
 ```
 
 The settings that produced each released dataset are kept beside it:
-`config_v052.json` is the file the v0.5.2 dataset was generated with, and
-`config_v053.json` the current one. `config.json` is a copy of the latest
-of these, so a plain run and the benchmark's chunker (which reads
-`config.json`) use the same values. To reproduce a dataset, pass its file
+`config_v052.json` and `config_v053.json` are the files those datasets were
+generated with, and `config_v054.json` is the current one. `config.json` is a
+copy of the latest of these, so a plain run and the benchmark's chunker (which
+reads `config.json`) use the same values. To reproduce a dataset, pass its file
 with `--config`; to make the next one, copy the latest file to a new version
 number, change it there, and copy it back over `config.json`. The dataset
 folder carries the same number (`train_data_v053/`), so the data and the
@@ -1645,7 +1645,7 @@ supersession links between editions of the same regulation.
   0.1 to 0.5, `terminology` weight 1.0 to 0.5 (it is unverified beyond
   length and was a third of the kept rows).
 - `config_v052.json` and `config_v053.json` keep the settings of each dataset
-  release; `config.json` mirrors the latest.
+  release; `config.json` mirrors the latest (now `config_v054.json`).
 - Measured on the full run (2026-10-20, 844 training-side documents, 30 h on a
   GB10 at `llm_parallel 8`): 104,088 text rows and 3,458 VLM samples, STaR
   acceptance 17,604 of 19,239 kept -- **91.5%**, against 38.4% under v0.5.2.
