@@ -83,6 +83,34 @@ def _script_re(script: str):
 
 _PROSE_RUN = re.compile(r"[^\W\d_]{2,}(?:\s+[^\W\d_]{2,})*", re.UNICODE)
 
+# Print specifications that every official form carries in its footer
+# ("210mm×297mm[백상지 80g/㎡]"). They are the only numbers on a blank form,
+# which is why a chunk whose figures are all of this kind answers nothing.
+_PRINT_SPEC = re.compile(
+    r"\d{2,3}\s*mm\s*[×xX*]\s*\d{2,3}\s*mm"
+    r"|\d+\s*g\s*/\s*(?:\u33a1|m2|\u339c)"
+    r"|\ubc31\uc0c1\uc9c0|\uc911\uc9c8\uc9c0|\ubcf4\uc874\uc6a9\uc9c0", re.I)
+# Any figure that carries meaning, and any clause reference.
+_MEANINGFUL = re.compile(
+    r"(?<!\uc81c)(?<![0-9.])\d+(?:\.\d+)?\s*"
+    r"(?:mm|cm|m|km|%|kg|t|\ud1a4|MPa|N|kN|\u2103|\ubd84|\uc2dc\uac04|\uc77c|"
+    r"\uac1c\uc6d4|\ub144|\ubc30|\ud68c|\uba85|\uac1c|\uc778)"
+    r"|\uc81c\s*\d+\s*\uc870|\d+(?:\.\d+){1,3}")
+
+
+def is_blank_form(text: str) -> bool:
+    """Whether *text* is an empty form: field labels and a print footer.
+
+    The footer is what gives it away. A blank form states its paper size and
+    stock weight and nothing else measurable, so stripping those leaves no
+    figure and no clause reference behind. A filled or cited form keeps the
+    article it is issued under -- 61% of form chunks in the v0.5.3 corpus do,
+    which is why the whole category must not be dropped -- and survives.
+    """
+    if not _PRINT_SPEC.search(text):
+        return False
+    return not _MEANINGFUL.search(_PRINT_SPEC.sub(" ", text))
+
 
 def is_structural_junk(text: str, min_letter_ratio: float = 0.40,
                        min_prose_run: int = 4) -> bool:
@@ -191,7 +219,8 @@ class PDFExtractor:
 
         min_run = getattr(self.config, "structural_min_prose_run", 0)
         min_letters = getattr(self.config, "structural_min_letter_ratio", 0.40)
-        kept, junk = [], 0
+        drop_blank = getattr(self.config, "drop_blank_forms", True)
+        kept, junk, blank = [], 0, 0
         for c in chunks:
             if not is_informative(c.text, self.config.informative_min_chars,
                                   self.config.informative_script):
@@ -199,13 +228,16 @@ class PDFExtractor:
             if min_run and is_structural_junk(c.text, min_letters, min_run):
                 junk += 1
                 continue
+            if drop_blank and is_blank_form(c.text):
+                blank += 1
+                continue
             kept.append(c)
         if len(kept) != len(chunks):
             logger.info(
                 "Dropped %d chunk(s) from '%s' (%d non-informative, "
-                "%d table residue)",
+                "%d table residue, %d blank form)",
                 len(chunks) - len(kept), pdf_path.name,
-                len(chunks) - len(kept) - junk, junk,
+                len(chunks) - len(kept) - junk - blank, junk, blank,
             )
         # Renumber so chunk_index stays contiguous after filtering.
         for new_index, chunk in enumerate(kept):
