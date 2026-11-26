@@ -161,7 +161,7 @@ class AECPipeline:
         # A benchmark-held-out document must not contribute training rows.
         # Its chunks still reach DAPT and the retrieval corpus (the open-book
         # track needs them there); only the supervised rows are withheld.
-        if pdf_path.stem in self._holdout_stems():
+        if self._holdout_key_for(pdf_path) in self._holdout_keys():
             if want_sft or want_dpo or want_star or want_rlvr:
                 self._holdout_skipped += 1
                 logger.info("[PDF] '%s' is benchmark holdout — skipping "
@@ -309,11 +309,18 @@ class AECPipeline:
         logger.info("[PDF] Done '%s' — %d records generated", pdf_path.name, count)
         return count
 
-    def _holdout_stems(self) -> set:
-        """Document stems the configured kcbench holdout file names."""
+    def _holdout_keys(self) -> set:
+        """Documents the configured kcbench holdout file names.
+
+        Keys are "<category>/<stem>", matching the manifest's generated_dir,
+        because file names repeat across categories: the v0.5.3 manifest has
+        three such names, and matching on the name alone would additionally
+        withhold 13 documents the benchmark never held out — silently
+        shrinking the training set and making the loss invisible.
+        """
         if self._holdout_cache is not None:
             return self._holdout_cache
-        stems: set = set()
+        keys: set = set()
         hf = getattr(self.config, "holdout_file", "") or ""
         if hf:
             try:
@@ -322,15 +329,20 @@ class AECPipeline:
                 for doc in data.get("pdf_documents", []) or []:
                     name = str(doc.get("generated_dir", "")).strip()
                     if name:
-                        stems.add(Path(name).name)
+                        keys.add(name.replace("\\", "/").strip("/"))
                 logger.info("Holdout filter active: %d document(s) from %s",
-                            len(stems), hf)
+                            len(keys), hf)
             except (OSError, ValueError) as exc:
                 # A configured-but-unreadable holdout file must not silently
                 # produce a contaminated dataset.
                 raise RuntimeError(f"holdout_file set but unreadable: {hf}: {exc}")
-        self._holdout_cache = stems
-        return stems
+        self._holdout_cache = keys
+        return keys
+
+    def _holdout_key_for(self, path: Path) -> str:
+        """The manifest key a document would appear under."""
+        sub = self.config.relative_subdir(path)
+        return f"{Path(sub).as_posix()}/{path.stem}" if sub else path.stem
 
     def _process_ifc(self, ifc_path: Path) -> int:
         logger.info("[IFC] Processing: %s", ifc_path.name)
