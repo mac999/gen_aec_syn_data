@@ -62,15 +62,16 @@ def main() -> int:
 
     # 3. holdout leakage
     if holdout and holdout.exists():
-        held = {Path(str(d.get("generated_dir", ""))).name
+        held = {str(d.get("generated_dir", "")).replace("\\", "/").strip("/")
                 for d in json.loads(holdout.read_text(encoding="utf-8")).get("pdf_documents", [])}
         held.discard("")
         leaks = set()
         for name in ("sllm_training_data.jsonl", "star_training_data.jsonl",
                      "dpo_training_data.jsonl", "rlvr_training_data.jsonl"):
             for f, _ in rows(root, name):
-                if f.parent.name in held:
-                    leaks.add(f"{f.parent.name}/{name}")
+                rel = f.parent.relative_to(root).as_posix()
+                if rel in held:
+                    leaks.add(f"{rel}/{name}")
         print(f"[3] holdout documents: {len(held)}, leaked outputs: {len(leaks)}")
         for l in sorted(leaks)[:5]:
             print("    !!", l)
