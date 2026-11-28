@@ -304,6 +304,10 @@ class SLLM_SFT_Engine:
             # No named section: keep the sentence structure but drop the slot.
             refusal = template.format(doc=chunk.doc_id, section="해당").replace(
                 "의 해당 조문", " 원문")
+        # A doc title carrying a numeral ("…변경(2회)…") would put a measured
+        # value into the refusal text and break the twin invariant.
+        if measured_values(refusal):
+            return None
         return SFTSample(
             id=self._next_id(chunk.doc_id),
             task_type="refusal",
