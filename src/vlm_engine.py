@@ -343,10 +343,14 @@ class VLMEngine:
             )
             if result:
                 return result
-            logger.warning("ComfyUI synthesis failed — using BIM render as fallback.")
+            logger.warning("ComfyUI synthesis failed for %s", render_path.name)
 
-        # Fallback: copy the BIM render as the site photo
-        return self._copy_as_site_photo(render_path)
+        # A copied render labelled "site photo" teaches the model to read
+        # renders, not photographs, so it is no longer a silent default.
+        # vlm_allow_render_copy_fallback restores it for structural dry runs.
+        if self.config.vlm_allow_render_copy_fallback:
+            return self._copy_as_site_photo(render_path)
+        return None
 
     def _control_image(self, render_path: Path, depth_path: Optional[Path]) -> Path:
         """Pick the image that will condition ControlNet."""

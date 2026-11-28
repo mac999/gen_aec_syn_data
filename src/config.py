@@ -267,6 +267,10 @@ class PipelineConfig:
     # False → start from an empty latent so the render's flat shading cannot
     # bleed through. True → img2img from the BIM render (needs i2i_denoise < 1).
     vlm_init_from_render: bool = False
+    # When ComfyUI is missing or fails, the old behaviour copied the BIM
+    # render in as the "site photo" — a pair that teaches render-reading, not
+    # photo-reading. Off by default; turn on only for structural dry runs.
+    vlm_allow_render_copy_fallback: bool = False
     vlm_image_width: int = 768
     vlm_image_height: int = 768
     vlm_control_resolution: int = 512   # depth-map raster size fed to ControlNet
