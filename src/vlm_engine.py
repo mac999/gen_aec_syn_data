@@ -306,6 +306,14 @@ class VLMEngine:
                 self._append_sample(sample)
                 successful += 1
 
+            negative = self._build_hard_negative(
+                eligible, render_path, site_photo_path, meta, elements,
+                project_type=project_type, trade_type=trade_type,
+                view_type=view_type,
+            )
+            if negative is not None:
+                self._append_sample(negative)
+                successful += 1
             eligible += 1
 
         if skipped:
@@ -740,6 +748,70 @@ class VLMEngine:
                 output=output,
             ))
         return samples
+
+    def _negative_selected(self, ordinal: int) -> bool:
+        """Bresenham spread of vlm_hard_negative_ratio over render ordinals."""
+        ratio = self.config.vlm_hard_negative_ratio
+        if ratio <= 0:
+            return False
+        if ratio >= 1:
+            return True
+        return int((ordinal + 1) * ratio) > int(ordinal * ratio)
+
+    def _build_hard_negative(
+        self,
+        ordinal: int,
+        render_path: Path,
+        site_photo_path: Path,
+        meta: Dict[str, Any],
+        elements: List[IFCElementInfo],
+        project_type: str,
+        trade_type: str,
+        view_type: str,
+    ) -> Optional[VLMSample]:
+        """
+        A constructed "not in this photo" sample for one render.
+
+        The target is an element type the model contains but this camera does
+        not see — known from the renderer's own visibility record, so the
+        answer holds by construction, like the text track's refusal twins. No
+        model call is made. None when the slot is not selected, there is no
+        visibility record, or every type in the model is visible here.
+        """
+        if not self._negative_selected(ordinal):
+            return None
+        visible = meta.get("visible_elements") or {}
+        if not visible or meta.get("fallback"):
+            return None
+        by_gid = {e.global_id: e for e in elements}
+        visible_types = {by_gid[g].ifc_type for g in visible if g in by_gid}
+        hidden_types = sorted(
+            {e.ifc_type for e in elements} - visible_types)
+        if not hidden_types:
+            return None
+        target = hidden_types[ordinal % len(hidden_types)]
+
+        fields = {"target_type": target, "project_type": project_type,
+                  "trade_type": trade_type, "view_type": view_type}
+        instruction = _fmt_prompt(
+            self.config.vlm_hard_negative_instruction, **fields)
+        answer = _fmt_prompt(self.config.vlm_hard_negative_answer, **fields)
+        self._sample_counter += 1
+        return VLMSample(
+            id=f"vlm_{self._sample_counter:06d}",
+            task_type="hard_negative",
+            images=[f"images/site_photo/{site_photo_path.name}"],
+            metadata=VLMMetadata(
+                project_type=project_type,
+                bim_element_ids=[],
+                trade_type=trade_type,
+                view_type=view_type,
+                camera=meta.get("camera"),
+                provenance=self._provenance(),
+            ),
+            instruction=instruction,
+            output=VLMOutput(answer=answer, label="absent", evidence=[]),
+        )
 
     def _write_render_catalog(
         self, render_meta: Dict[str, Dict[str, Any]], model_id: str

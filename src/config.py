@@ -271,6 +271,15 @@ class PipelineConfig:
     # render in as the "site photo" — a pair that teaches render-reading, not
     # photo-reading. Off by default; turn on only for structural dry runs.
     vlm_allow_render_copy_fallback: bool = False
+    # Constructed negatives: this share of photo renders also gets one
+    # "not in this photo" sample, targeting an element type the model holds
+    # but the render's camera does not see (per the visibility record), so
+    # the answer is true by construction. 0 disables.
+    vlm_hard_negative_ratio: float = 0.0
+    vlm_hard_negative_instruction: str = (
+        "이 건설 현장 사진에서 {target_type} 요소가 보이는지 판단하시오.")
+    vlm_hard_negative_answer: str = (
+        "이 사진에서는 {target_type} 요소가 확인되지 않습니다.")
     vlm_image_width: int = 768
     vlm_image_height: int = 768
     vlm_control_resolution: int = 512   # depth-map raster size fed to ControlNet
