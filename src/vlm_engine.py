@@ -227,25 +227,31 @@ class VLMEngine:
         project_type: str = "건물",
         trade_type: str = "철근콘크리트",
         depth_paths: Optional[List[Optional[Path]]] = None,
+        render_meta: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> int:
         """
         For each BIM render, synthesise a site photo and write a VLMSample.
 
         *depth_paths* is index-aligned with *render_paths*; where an entry is
         missing the colour render is used as the ControlNet hint instead.
+        *render_meta* is the per-render camera/visibility record from
+        ``IFCProcessor.process``; with it, every sample is grounded on the
+        elements its own camera sees rather than on the whole model.
 
         Returns the number of successfully written samples.
         """
         successful = 0
-        elem_ids = [e.global_id for e in elements[:10]]  # cap to 10
         depths = depth_paths or []
         photo_views = self.config.vlm_photo_views
         skipped: Dict[str, int] = {}
+        render_meta = render_meta or {}
+        by_gid = {e.global_id: e for e in elements}
 
-        # Sidecar catalog (audit/verification asset) + grounding text for the VLM.
-        # Both are derived from element metadata only; image synthesis is untouched.
+        # Sidecar catalogs (audit/verification assets). Element properties and
+        # the per-render camera/visibility record; image synthesis untouched.
         self._write_element_catalog(elements, model_id)
-        bim_context = self._elements_to_text(elements)
+        self._write_render_catalog(render_meta, model_id)
+        eligible = 0        # photo-view renders, for negative-slot spreading
 
         for index, render_path in enumerate(render_paths):
             view_name = render_path.stem.split("_")[-1]
@@ -257,6 +263,19 @@ class VLMEngine:
             if photo_views and view_name not in photo_views:
                 skipped[view_name] = skipped.get(view_name, 0) + 1
                 continue
+
+            meta = render_meta.get(render_path.name) or {}
+            visible = meta.get("visible_elements") or {}
+            # Grounding follows the camera: ids and prompt context come from
+            # what this render shows, largest first. Without a record (legacy
+            # caller, fallback render) the whole model remains the context.
+            if visible:
+                ordered = sorted(visible, key=visible.get, reverse=True)
+                shown = [by_gid[g] for g in ordered if g in by_gid]
+            else:
+                shown = list(elements)
+            elem_ids = [e.global_id for e in shown[:10]]  # cap to 10
+            bim_context = self._elements_to_text(shown)
 
             # UNCHANGED: ComfyUI depth-conditioned site-photo synthesis.
             site_photo_path = self._synthesise_site_photo(
@@ -282,9 +301,12 @@ class VLMEngine:
                 project_type=project_type,
                 trade_type=trade_type,
                 view_type=view_type,
+                camera=meta.get("camera"),
             ):
                 self._append_sample(sample)
                 successful += 1
+
+            eligible += 1
 
         if skipped:
             logger.info(
@@ -303,7 +325,7 @@ class VLMEngine:
         view_type: str = "perspective",
     ) -> Optional[Path]:
         """
-        Try ComfyUI synthesis; fall back to a direct copy of the BIM render.
+        Try ComfyUI synthesis; None when no real photo could be made.
         """
         if self.config.reuse_images:
             existing = self.site_photo_dir / f"{render_path.stem}_site.png"
@@ -669,6 +691,7 @@ class VLMEngine:
         project_type: str,
         trade_type: str,
         view_type: str,
+        camera: Optional[Dict[str, Any]] = None,
     ) -> List[VLMSample]:
         """One VLMSample per configured task; schema is unchanged across tasks."""
         samples: List[VLMSample] = []
@@ -706,12 +729,33 @@ class VLMEngine:
                     bim_element_ids=elem_ids,
                     trade_type=trade_type,
                     view_type=view_type,
+                    camera=camera,
                     provenance=self._provenance(),
                 ),
                 instruction=instruction,
                 output=output,
             ))
         return samples
+
+    def _write_render_catalog(
+        self, render_meta: Dict[str, Dict[str, Any]], model_id: str
+    ) -> None:
+        """
+        Dump the per-render camera/visibility record to
+        <out_dir>/render_catalog.json — the audit asset that says which
+        elements each saved render actually shows and from where.
+        """
+        if not self.config.vlm_write_bim_catalog or not render_meta:
+            return
+        path = self.output_root / "render_catalog.json"
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump({"model_id": model_id, "renders": render_meta},
+                          fh, ensure_ascii=False, indent=2)
+            logger.info("Wrote render catalog: %s (%d renders)",
+                        path.name, len(render_meta))
+        except OSError as exc:
+            logger.warning("Could not write render catalog: %s", exc)
 
     # Verdict vocabulary used when a task does not declare its own.
     _DEFAULT_LABELS = ["match", "partial_match", "mismatch", "unknown"]

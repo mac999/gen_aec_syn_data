@@ -76,6 +76,11 @@ class VLMMetadata(BaseModel):
     bim_element_ids: List[str] = Field(description="IFC global IDs or element GUIDs")
     trade_type: str = Field(description="e.g. 철근콘크리트, 철골, 목구조")
     view_type: str = Field(description="3d_render | top_view | front_view | perspective")
+    camera: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Camera of the render the sample was built from: "
+                    "elev/azim and projection. Absent before v0.5.5.",
+    )
     provenance: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Generation record: pipeline version, VLM/SD models and "
