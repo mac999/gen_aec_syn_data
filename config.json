@@ -320,5 +320,7 @@
         "rag"
       ]
     }
-  ]
+  ],
+  "_comment_vlm": "v0.5.4 image track (1-9): constructed hard negatives at 0.3, render-copy fallback off (code default). Only the IFC/VLM path reads these; the text corpora of this release are reproduced unchanged.",
+  "vlm_hard_negative_ratio": 0.3
 }
