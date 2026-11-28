@@ -291,6 +291,42 @@ def rasterise_colour_image(
     return out
 
 
+def visible_element_pixels(
+    all_tris: List[Tuple[np.ndarray, str, str]],
+    elev: float,
+    azim: float,
+    size: int = 256,
+) -> Dict[str, int]:
+    """
+    Pixels each element actually wins in the z-buffer for one camera.
+
+    The render and the depth map already come out of ``_rasterise``; running
+    the same pass once more at a small *size* and mapping the winning triangle
+    back to its element answers "what does this view show" with the renderer's
+    own occlusion, instead of guessing from the whole model's element list.
+    Returns ``{global_id: pixel_count}`` for every element that won at least
+    one pixel.
+    """
+    kept = [(t, gid) for t, _, gid in all_tris if len(t)]
+    if not kept:
+        return {}
+    tris = np.vstack([t for t, _ in kept])
+    counts = np.array([len(t) for t, _ in kept])
+    offsets = np.cumsum(counts)          # tri index < offsets[k] → element k
+    try:
+        _, idxbuf, _ = _rasterise(tris, elev, azim, size)
+    except ValueError:
+        return {}
+    hit = idxbuf[idxbuf >= 0]
+    if hit.size == 0:
+        return {}
+    owner = np.searchsorted(offsets, hit, side="right")
+    visible: Dict[str, int] = {}
+    for k, px in zip(*np.unique(owner, return_counts=True)):
+        visible[kept[int(k)][1]] = int(px)
+    return visible
+
+
 class IFCProcessor:
     """Loads an IFC file and produces element metadata + rendered PNG images."""
 
@@ -309,7 +345,8 @@ class IFCProcessor:
         ifc_path: Path,
         render_dir: Optional[Path] = None,
         depth_dir: Optional[Path] = None,
-    ) -> Tuple[List[IFCElementInfo], List[Path], List[Optional[Path]]]:
+    ) -> Tuple[List[IFCElementInfo], List[Path], List[Optional[Path]],
+               Dict[str, Dict[str, Any]]]:
         """
         Parse *ifc_path* and render base views.
 
@@ -327,6 +364,10 @@ class IFCProcessor:
         render_paths : list of absolute Paths to the saved PNG renders
         depth_paths : depth map per render, index-aligned with *render_paths*;
                       an entry is None when rasterisation failed for that view
+        render_meta : per-render camera and visibility record, keyed by the
+                      render file name: view name, (elev, azim), group index,
+                      the group's element ids and ``{global_id: pixels}`` for
+                      the elements the camera actually sees
         """
         try:
             import ifcopenshell  # noqa: PLC0415
@@ -346,10 +387,10 @@ class IFCProcessor:
 
         render_dir = render_dir or self.config.bim_render_dir
         depth_dir = depth_dir or (render_dir.parent / "depth")
-        render_paths, depth_paths = self._render_views(
+        render_paths, depth_paths, render_meta = self._render_views(
             ifc_file, ifc_path.stem, elements, render_dir, depth_dir
         )
-        return elements, render_paths, depth_paths
+        return elements, render_paths, depth_paths, render_meta
 
     def _extract_elements(
         self, ifc_file: Any, model_id: str
@@ -397,12 +438,13 @@ class IFCProcessor:
         elements: List[IFCElementInfo],
         render_dir: Path,
         depth_dir: Path,
-    ) -> Tuple[List[Path], List[Optional[Path]]]:
+    ) -> Tuple[List[Path], List[Optional[Path]], Dict[str, Dict[str, Any]]]:
         """Render each view into *render_dir* and return the saved PNG paths."""
         render_dir.mkdir(parents=True, exist_ok=True)
         depth_dir.mkdir(parents=True, exist_ok=True)
         render_paths: List[Path] = []
         depth_paths: List[Optional[Path]] = []
+        render_meta: Dict[str, Dict[str, Any]] = {}
 
         # Build render groups: [0] the whole model, then one per
         # IfcBuildingStorey, then one per IfcSpace.
@@ -477,7 +519,7 @@ class IFCProcessor:
             # Conformance and proxy-only IFC files hit this routinely.
             # Count triangles, not entries: an element can come back with an
             # empty (0, 3, 3) array, so a non-empty list still renders nothing.
-            triangle_count = sum(len(tris) for tris, _ in all_tris)
+            triangle_count = sum(len(tris) for tris, *_ in all_tris)
             if triangle_count == 0:
                 skipped_empty += 1
                 logger.warning(
@@ -492,11 +534,15 @@ class IFCProcessor:
                 if self.config.reuse_images and out_path.exists():
                     render_paths.append(out_path)
                     depth_paths.append(self._reuse_depth(depth_dir, out_path))
+                    render_meta[out_path.name] = self._view_record(
+                        all_tris, group, index, view_name)
                     logger.debug("Reused render: %s", out_path.name)
                     continue
                 try:
                     self._render_to_file(all_tris, group, view_name, out_path)
                     render_paths.append(out_path)
+                    render_meta[out_path.name] = self._view_record(
+                        all_tris, group, index, view_name)
                     logger.info("Saved render: %s", out_path.name)
                 except Exception as exc:
                     # The fallback draws a legend on the background colour. That
@@ -516,6 +562,12 @@ class IFCProcessor:
                     try:
                         self._render_fallback(group, view_name, out_path)
                         render_paths.append(out_path)
+                        # A schematic legend shows no geometry, so it has no
+                        # honest visibility record.
+                        record = self._view_record(
+                            all_tris, group, index, view_name, rasterise=False)
+                        record["fallback"] = True
+                        render_meta[out_path.name] = record
                     except Exception as exc2:
                         logger.error("Fallback render also failed: %s", exc2)
                         continue
@@ -530,7 +582,33 @@ class IFCProcessor:
                 "Skipped %d of %d group(s) in '%s' for having no geometry",
                 skipped_empty, len(list_group), model_id,
             )
-        return render_paths, depth_paths
+        return render_paths, depth_paths, render_meta
+
+    def _view_record(
+        self,
+        all_tris: List[Tuple[np.ndarray, str, str]],
+        group: List[IFCElementInfo],
+        group_index: int,
+        view_name: str,
+        rasterise: bool = True,
+    ) -> Dict[str, Any]:
+        """Camera and visibility record for one saved render."""
+        elev, azim = self._view_angle(view_name)
+        visible: Dict[str, int] = {}
+        if rasterise:
+            try:
+                visible = visible_element_pixels(all_tris, elev, azim)
+            except Exception as exc:
+                logger.warning("Visibility pass failed for view '%s': %s",
+                               view_name, exc)
+        return {
+            "view": view_name,
+            "camera": {"elev": elev, "azim": azim,
+                       "projection": "orthographic"},
+            "group_index": group_index,
+            "group_element_ids": [e.global_id for e in group],
+            "visible_elements": visible,
+        }
 
     def _reuse_depth(self, depth_dir: Path, render_path: Path) -> Optional[Path]:
         """Depth map matching an already-present render, or None."""
@@ -551,7 +629,7 @@ class IFCProcessor:
             from PIL import Image  # noqa: PLC0415
 
             elev, azim = self._view_angle(view_name)
-            tris = np.vstack([t for t, _ in all_tris])
+            tris = np.vstack([t for t, *_ in all_tris])
             depth = rasterise_depth_map(
                 tris, elev, azim, self.config.vlm_control_resolution,
                 ground=self.config.vlm_depth_ground_plane,
@@ -652,10 +730,12 @@ class IFCProcessor:
 
     def _extract_geometry(
         self, ifc_file: Any, elements: List[IFCElementInfo]
-    ) -> List[Tuple[np.ndarray, str]]:
+    ) -> List[Tuple[np.ndarray, str, str]]:
         """
-        Returns a list of (triangle_array, colour_hex) where
+        Returns a list of (triangle_array, colour_hex, global_id) where
         triangle_array has shape (N, 3, 3) — N triangles × 3 verts × xyz.
+        The global id keeps every triangle attributable to its element, which
+        is what per-render visibility is counted from.
         """
         try:
             import ifcopenshell.geom  # noqa: PLC0415
@@ -665,7 +745,7 @@ class IFCProcessor:
         settings = ifcopenshell.geom.settings()
         settings.set(settings.USE_WORLD_COORDS, True)
 
-        result: List[Tuple[np.ndarray, str]] = []
+        result: List[Tuple[np.ndarray, str, str]] = []
         collected = 0
 
         for elem_info in elements:
@@ -679,7 +759,7 @@ class IFCProcessor:
                     faces = np.array(shape.geometry.faces).reshape(-1, 3)
                     tris = verts[faces]  # (N, 3, 3)
                     colour = _TYPE_COLOURS.get(elem_info.ifc_type, _DEFAULT_COLOUR)
-                    result.append((tris, colour))
+                    result.append((tris, colour, elem_info.global_id))
                     collected += 1
                     break
             except Exception:
@@ -709,10 +789,10 @@ class IFCProcessor:
         if not all_tris:
             raise ValueError("No triangles to render")
 
-        tris = np.vstack([t for t, _ in all_tris])
+        tris = np.vstack([t for t, *_ in all_tris])
         tri_colours = np.vstack([
             np.repeat(np.array([_hex_to_rgb(colour)], dtype=float), len(t), axis=0)
-            for t, colour in all_tris
+            for t, colour, *_ in all_tris
         ])
 
         elev, azim = self._view_angle(view_name)

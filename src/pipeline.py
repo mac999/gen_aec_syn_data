@@ -354,11 +354,12 @@ class AECPipeline:
         self.vlm_engine.set_output_dir(vlm_dir)
 
         try:
-            elements, render_paths, depth_paths = self.ifc_processor.process(
-                ifc_path,
-                render_dir=self.vlm_engine.bim_render_dir,
-                depth_dir=self.vlm_engine.depth_map_dir,
-            )
+            elements, render_paths, depth_paths, render_meta = (
+                self.ifc_processor.process(
+                    ifc_path,
+                    render_dir=self.vlm_engine.bim_render_dir,
+                    depth_dir=self.vlm_engine.depth_map_dir,
+                ))
         except Exception as exc:
             logger.error("[IFC] Processing failed for '%s': %s", ifc_path.name, exc)
             return 0
@@ -383,6 +384,7 @@ class AECPipeline:
                 project_type=project_type,
                 trade_type=trade_type,
                 depth_paths=depth_paths,
+                render_meta=render_meta,
             )
         except Exception as exc:
             logger.error("[IFC] VLM engine error for '%s': %s", ifc_path.name, exc)
